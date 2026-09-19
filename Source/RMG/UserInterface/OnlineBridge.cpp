@@ -1,5 +1,7 @@
 #include "OnlineBridge.hpp"
 
+#ifdef NETPLAY
+
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -18,6 +20,10 @@ static const char* const SUPABASE_URL = "https://jexxpiumbulpuashtjia.supabase.c
 static const char* const SUPABASE_ANON_KEY = "sb_publishable_AS3AbHJZ-nMJsdRkZbXFAA_M6aeTWVB";
 static const char* const SHARED_MEM_NAME = "Local\\SmashRemixOnlineBridge";
 
+// Same production lobby endpoint RollbackLobbyDialog/LobbyConnectDialog use
+// (see LobbyConnectDialog.cpp: kDefaultLobbyUrl).
+static const char* const LOBBY_SERVER_URL = "ws://216.128.157.98:8080/ws";
+
 OnlineBridge::OnlineBridge(QObject* parent) : QObject(parent)
 {
     if (!openSharedMemory())
@@ -28,6 +34,13 @@ OnlineBridge::OnlineBridge(QObject* parent) : QObject(parent)
     m_network = new QNetworkAccessManager(this);
     connect(m_network, &QNetworkAccessManager::finished, this, &OnlineBridge::onResolveCodeReply);
 
+    m_lobbyClient = new Dialog::LobbyClient(this);
+    connect(m_lobbyClient, &Dialog::LobbyClient::stateChanged, this, &OnlineBridge::onLobbyStateChanged);
+    connect(m_lobbyClient, &Dialog::LobbyClient::presenceFull, this, &OnlineBridge::onLobbyPresenceChanged);
+    connect(m_lobbyClient, &Dialog::LobbyClient::userAdded, this, [this](quint64) { onLobbyPresenceChanged(); });
+    connect(m_lobbyClient, &Dialog::LobbyClient::userRemoved, this, [this](quint64) { onLobbyPresenceChanged(); });
+    connect(m_lobbyClient, &Dialog::LobbyClient::userUpdated, this, [this](quint64) { onLobbyPresenceChanged(); });
+
     m_pollTimer = new QTimer(this);
     connect(m_pollTimer, &QTimer::timeout, this, &OnlineBridge::pollSharedMemory);
     m_pollTimer->start(250);
@@ -35,6 +48,10 @@ OnlineBridge::OnlineBridge(QObject* parent) : QObject(parent)
 
 OnlineBridge::~OnlineBridge()
 {
+    if (m_lobbyClient != nullptr)
+    {
+        m_lobbyClient->disconnectFromServer();
+    }
     if (m_shared != nullptr)
     {
         UnmapViewOfFile(m_shared);
@@ -74,6 +91,57 @@ bool OnlineBridge::openSharedMemory()
     return true;
 }
 
+void OnlineBridge::connectToLobbyIfNeeded()
+{
+    if (m_lobbyClient == nullptr || m_myNickname.isEmpty())
+    {
+        return;
+    }
+    if (m_lobbyClient->state() == Dialog::LobbyClient::ConnectionState::Connected ||
+        m_lobbyClient->state() == Dialog::LobbyClient::ConnectionState::Connecting)
+    {
+        return;
+    }
+    m_lobbyClient->connectToServer(LOBBY_SERVER_URL, m_myNickname, {});
+}
+
+void OnlineBridge::onLobbyStateChanged(Dialog::LobbyClient::ConnectionState state)
+{
+    if (state == Dialog::LobbyClient::ConnectionState::Connected)
+    {
+        refreshPresence();
+    }
+}
+
+void OnlineBridge::onLobbyPresenceChanged()
+{
+    refreshPresence();
+}
+
+void OnlineBridge::refreshPresence()
+{
+    if (m_shared == nullptr || m_lobbyClient == nullptr)
+    {
+        return;
+    }
+
+    const auto& users = m_lobbyClient->users();
+    uint32_t count = 0;
+    memset(m_shared->onlineNicknames, 0, sizeof(m_shared->onlineNicknames));
+
+    for (auto it = users.constBegin(); it != users.constEnd() && count < 4; ++it)
+    {
+        if (it->username == m_myNickname)
+        {
+            continue; // no listarme a mi mismo
+        }
+        const QByteArray utf8 = it->username.toUtf8().left(23);
+        memcpy(m_shared->onlineNicknames[count], utf8.constData(), utf8.size());
+        count++;
+    }
+    m_shared->onlineCount = count;
+}
+
 void OnlineBridge::pollSharedMemory()
 {
     if (m_shared == nullptr || m_requestInFlight)
@@ -100,10 +168,7 @@ void OnlineBridge::pollSharedMemory()
         memcpy(rawCode, m_shared->inputCode, 8);
         const QString code = QString::fromLatin1(rawCode).trimmed();
 
-        if (m_shared != nullptr)
-        {
-            m_shared->status = ONLINE_BRIDGE_STATUS_WORKING; // intermediate: responseId stays behind on purpose
-        }
+        m_shared->status = ONLINE_BRIDGE_STATUS_WORKING; // intermediate: responseId stays behind on purpose
 
         if (code.isEmpty())
         {
@@ -148,6 +213,14 @@ void OnlineBridge::onResolveCodeReply(QNetworkReply* reply)
     const QJsonObject row = doc.array().first().toObject();
     const QString nickname = row["nickname"].toString();
     writeStatus(requestId, ONLINE_BRIDGE_STATUS_FOUND, nickname);
+
+    // Ahora que sabemos quienes somos publicamente, conectarse al lobby con
+    // esa misma identidad para que la presencia (quien esta online) funcione.
+    if (!nickname.isEmpty())
+    {
+        m_myNickname = nickname;
+        connectToLobbyIfNeeded();
+    }
 }
 
 void OnlineBridge::writeStatus(uint32_t requestId, uint32_t status, const QString& nickname)
@@ -168,3 +241,5 @@ void OnlineBridge::writeStatus(uint32_t requestId, uint32_t status, const QStrin
 }
 
 } // namespace UserInterface
+
+#endif // NETPLAY

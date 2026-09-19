@@ -13,6 +13,10 @@
 #ifndef ONLINEBRIDGE_HPP
 #define ONLINEBRIDGE_HPP
 
+#ifdef NETPLAY
+
+#include "Dialog/Lobby/LobbyClient.hpp"
+
 #include <QObject>
 #include <QTimer>
 #include <QString>
@@ -37,6 +41,12 @@ struct OnlineBridgeShared
     uint32_t responseId;         // mirrors requestId once processed
     uint32_t status;             // 0 = idle, 1 = working, 2 = found, 3 = not_found, 4 = error
     char     resultNickname[24];
+    // Presence: not yet populated (no Lobby connection wired up here yet),
+    // but reserved now so the shared-memory layout matches wrapper.c's
+    // expanded struct. Stays all-zero until a later pass connects this to
+    // RollbackLobbyDialog's LobbyClient.
+    uint32_t onlineCount;
+    char     onlineNicknames[4][24];
 };
 #pragma pack(pop)
 
@@ -63,9 +73,15 @@ class OnlineBridge : public QObject
     void pollSharedMemory();
     void onResolveCodeReply(QNetworkReply* reply);
 
+    // Lobby presence (mirrors Dialog::LobbyClient's own signals)
+    void onLobbyPresenceChanged();
+    void onLobbyStateChanged(Dialog::LobbyClient::ConnectionState state);
+
   private:
     bool openSharedMemory();
     void writeStatus(uint32_t requestId, uint32_t status, const QString& nickname = QString());
+    void connectToLobbyIfNeeded();
+    void refreshPresence();
 
     HANDLE m_mapping = nullptr;
     OnlineBridgeShared* m_shared = nullptr;
@@ -73,8 +89,14 @@ class OnlineBridge : public QObject
     QNetworkAccessManager* m_network = nullptr;
     uint32_t m_lastSeenRequestId = 0;
     bool m_requestInFlight = false;
+
+    // Once a code resolves we know the player's public nickname; that's what
+    // we log into the lobby with (same identity as everywhere else on the site).
+    QString m_myNickname;
+    Dialog::LobbyClient* m_lobbyClient = nullptr;
 };
 
 } // namespace UserInterface
 
+#endif // NETPLAY
 #endif // ONLINEBRIDGE_HPP
