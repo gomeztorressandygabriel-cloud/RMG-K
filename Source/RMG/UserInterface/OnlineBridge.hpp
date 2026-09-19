@@ -1,14 +1,22 @@
 /*
  * Smash Remix Online Bridge
  *
- * Connects the ROM's "Ranked" menu (via the shared-memory struct below,
- * mirrored on the ROM side by the RMG-Audio wrapper plugin) to the
- * SmashRemix Supabase project, and eventually to RollbackLobbyDialog's
- * LobbyClient to trigger matchmaking without the player leaving the game.
+ * Connects the ROM's "Ranked Account" menu (via the shared-memory struct
+ * below, mirrored on the ROM side by the RMG-Audio wrapper plugin) to the
+ * SmashRemix Supabase project AND to RMG-K's own rollback Lobby (the same
+ * LobbyClient RollbackLobbyDialog uses), so the player can see who's online
+ * and challenge them without ever leaving the game or touching a Qt dialog.
  *
- * v1 scope: resolve a typed player code to a public nickname/avatar via a
- * security-definer Postgres RPC (never the service_role key — that key must
- * never ship inside a binary every player runs locally).
+ * - Player codes resolve via a security-definer Postgres RPC (never the
+ *   service_role key — that key must never ship inside a binary every
+ *   player runs locally).
+ * - Presence/challenge reuse RMG-K's existing lobby server and LobbyClient
+ *   class as-is; this class only owns a second LobbyClient instance and
+ *   mirrors its state into RDRAM instead of a Qt widget.
+ * - Challenges are rooms named "RETO:<target nickname>". A player's own
+ *   bridge watches the room list for one addressed to their own nickname
+ *   to know they've been challenged, and joins it to accept. No lobby
+ *   server changes needed — this is a convention on top of existing rooms.
  */
 #ifndef ONLINEBRIDGE_HPP
 #define ONLINEBRIDGE_HPP
@@ -29,30 +37,34 @@ class QNetworkReply;
 namespace UserInterface
 {
 
+constexpr int ONLINE_BRIDGE_MAX_PRESENCE = 4;
+
 #pragma pack(push, 1)
 struct OnlineBridgeShared
 {
     char     signature[12];      // "SRONLINEV1\0"
     // Inbound (written by the RMG-Audio wrapper plugin, from ROM RDRAM data)
-    uint32_t command;            // 0 = none, 1 = resolve_code
-    char     inputCode[8];       // typed player code, null-terminated
+    uint32_t command;            // 0=none, 1=resolve_code, 2=send_challenge, 3=accept_challenge
+    char     inputCode[8];       // typed player code, null-terminated (resolve_code)
+    char     challengeTarget[24];// nickname to challenge (send_challenge)
     uint32_t requestId;          // bumped by the plugin for every new request
     // Outbound (written by RMG-K, read back by the plugin into RDRAM)
     uint32_t responseId;         // mirrors requestId once processed
-    uint32_t status;             // 0 = idle, 1 = working, 2 = found, 3 = not_found, 4 = error
+    uint32_t status;             // 0=idle,1=working,2=ok,3=not_found/failed,4=error
     char     resultNickname[24];
-    // Presence: not yet populated (no Lobby connection wired up here yet),
-    // but reserved now so the shared-memory layout matches wrapper.c's
-    // expanded struct. Stays all-zero until a later pass connects this to
-    // RollbackLobbyDialog's LobbyClient.
+    // Presence: kept current continuously once connected to the lobby.
     uint32_t onlineCount;
-    char     onlineNicknames[4][24];
+    char     onlineNicknames[ONLINE_BRIDGE_MAX_PRESENCE][24];
+    // Kept current continuously: who is challenging ME right now (empty if nobody).
+    char     incomingChallenger[24];
 };
 #pragma pack(pop)
 
 // command values
 constexpr uint32_t ONLINE_BRIDGE_CMD_NONE = 0;
 constexpr uint32_t ONLINE_BRIDGE_CMD_RESOLVE_CODE = 1;
+constexpr uint32_t ONLINE_BRIDGE_CMD_SEND_CHALLENGE = 2;
+constexpr uint32_t ONLINE_BRIDGE_CMD_ACCEPT_CHALLENGE = 3;
 
 // status values
 constexpr uint32_t ONLINE_BRIDGE_STATUS_IDLE = 0;
@@ -73,15 +85,23 @@ class OnlineBridge : public QObject
     void pollSharedMemory();
     void onResolveCodeReply(QNetworkReply* reply);
 
-    // Lobby presence (mirrors Dialog::LobbyClient's own signals)
+    // Lobby presence + rooms (mirrors Dialog::LobbyClient's own signals)
     void onLobbyPresenceChanged();
     void onLobbyStateChanged(Dialog::LobbyClient::ConnectionState state);
+    void onLobbyRoomListChanged();
+    void onLobbyRoomCreated(quint64 roomId);
+    void onLobbyRoomCreateFailed(const QString& reason);
+    void onLobbyRoomJoinOk(quint64 roomId);
+    void onLobbyRoomJoinFailed(const QString& reason);
 
   private:
     bool openSharedMemory();
     void writeStatus(uint32_t requestId, uint32_t status, const QString& nickname = QString());
     void connectToLobbyIfNeeded();
     void refreshPresence();
+    void checkIncomingChallenge();
+    void sendChallenge(uint32_t requestId, const QString& targetNickname);
+    void acceptChallenge(uint32_t requestId);
 
     HANDLE m_mapping = nullptr;
     OnlineBridgeShared* m_shared = nullptr;
@@ -94,6 +114,16 @@ class OnlineBridge : public QObject
     // we log into the lobby with (same identity as everywhere else on the site).
     QString m_myNickname;
     Dialog::LobbyClient* m_lobbyClient = nullptr;
+
+    // Tracks the request currently waiting on a createRoom/joinRoom result,
+    // so the async roomCreated/roomJoinOk signals know which RDRAM request
+    // to answer back to.
+    uint32_t m_pendingRoomRequestId = 0;
+
+    // Populated by scanning the room list for one named "RETO:<my nickname>".
+    // 0 when nobody is currently challenging me.
+    quint64 m_incomingChallengeRoomId = 0;
+    QString m_incomingChallengerName;
 };
 
 } // namespace UserInterface
