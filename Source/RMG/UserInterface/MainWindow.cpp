@@ -1583,6 +1583,11 @@ MainWindow::MainWindow() : QMainWindow(nullptr)
 
 MainWindow::~MainWindow()
 {
+    if (this->onlineBridge != nullptr)
+    {
+        delete this->onlineBridge;
+        this->onlineBridge = nullptr;
+    }
     CoreRollbackFreeGameState(this->ui_RollbackDebugState);
     CoreRollbackFreeGameState(g_RollbackDebugReplay.initialState);
     CoreRollbackFreeGameState(g_RollbackDebugReplay.finalState);
@@ -1608,6 +1613,9 @@ bool MainWindow::Init(QApplication* app, bool showUI, bool launchROM)
     this->initializeUI(launchROM);
     this->initializeActions();
     this->configureUI(app, showUI);
+
+    this->onlineBridge = new OnlineBridge(this);
+
 #ifdef NETPLAY
     this->refreshKailleraRecordingStorageStatus(true);
 #endif // NETPLAY

@@ -50,6 +50,7 @@ endif()
 set(RMG_SOURCES
     UserInterface/MainWindow.cpp
     UserInterface/MainWindow.ui
+    UserInterface/OnlineBridge.cpp
     UserInterface/Widget/RomBrowser/RomBrowserWidget.cpp
     UserInterface/Widget/RomBrowser/RomBrowserListViewWidget.cpp
     UserInterface/Widget/RomBrowser/RomBrowserGridViewWidget.cpp

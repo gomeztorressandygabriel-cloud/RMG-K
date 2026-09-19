@@ -13,6 +13,7 @@
 #include "Thread/EmulationThread.hpp"
 #include "EventFilter.hpp"
 #include "Callbacks.hpp"
+#include "OnlineBridge.hpp"
 
 #include <RMG-Core/RollbackNetcode.hpp>
 
@@ -142,6 +143,7 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     QString ui_WindowTitle;
 
     Dialog::LogDialog logDialog;
+    OnlineBridge* onlineBridge = nullptr;
 #ifdef NETPLAY
     Dialog::NetplaySessionDialog* netplaySessionDialog = nullptr;
     Dialog::RollbackLobbyDialog* rollbackLobbyDialog = nullptr;
