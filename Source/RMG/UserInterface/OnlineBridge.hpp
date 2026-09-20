@@ -57,6 +57,17 @@ struct OnlineBridgeShared
     char     onlineNicknames[ONLINE_BRIDGE_MAX_PRESENCE][24];
     // Kept current continuously: who is challenging ME right now (empty if nobody).
     char     incomingChallenger[24];
+
+    // Identidad de la partida de desafio actualmente en curso (ver
+    // live_reader.py: la usa para reportar el resultado a Supabase via la
+    // funcion report_match_result). matchKey = 0 significa "no hay ninguna
+    // partida de desafio activa" (partida local/practica: no se reporta
+    // nada). matchKey es el id de sala del Lobby, compartido por ambos
+    // jugadores, asi que sirve para que el servidor empareje los dos
+    // reportes independientes (uno por cliente) de la misma partida.
+    uint32_t matchKey;
+    uint32_t myPort;                    // 1-4: que puerto local juego yo en esta partida
+    char     matchOpponentNickname[24];
 };
 #pragma pack(pop)
 
@@ -80,6 +91,19 @@ class OnlineBridge : public QObject
   public:
     explicit OnlineBridge(QObject* parent = nullptr);
     ~OnlineBridge() override;
+
+    // MainWindow calls this from on_Lobby_SessionRequested once the real
+    // match actually starts, with the local port RollbackLobbyDialog just
+    // assigned us. Finalizes the pending challenge-match identity (queued by
+    // handOffRoomToLobbyDialog) into shared memory so live_reader.py can see
+    // it. No-op if no challenge handoff is pending (a manual, non-ranked
+    // Lobby match started instead).
+    void recordMatchStarted(int localPort);
+
+    // MainWindow calls this once emulation for a challenge-originated match
+    // actually stops, so a later local/practice session isn't mistakenly
+    // attributed to a stale challenge. No-op if nothing is active.
+    void clearActiveChallengeMatch();
 
   signals:
     // A challenge room is ready to actually play: MainWindow should open the
@@ -112,7 +136,7 @@ class OnlineBridge : public QObject
     void checkIncomingChallenge();
     void sendChallenge(uint32_t requestId, const QString& targetNickname);
     void acceptChallenge(uint32_t requestId);
-    void handOffRoomToLobbyDialog(quint64 roomId, bool isHost);
+    void handOffRoomToLobbyDialog(quint64 roomId, bool isHost, const QString& opponentNickname);
 
     HANDLE m_mapping = nullptr;
     OnlineBridgeShared* m_shared = nullptr;
@@ -140,6 +164,17 @@ class OnlineBridge : public QObject
     // 0 when nobody is currently challenging me.
     quint64 m_incomingChallengeRoomId = 0;
     QString m_incomingChallengerName;
+
+    // Nickname passed to the last sendChallenge() call, so onLobbyRoomCreated
+    // (which only gets a roomId back from the server) knows who the
+    // challenge was actually for.
+    QString m_lastChallengeTargetNickname;
+
+    // Set by handOffRoomToLobbyDialog, finalized into m_shared by
+    // recordMatchStarted once the real local port is known. 0 = nothing
+    // pending.
+    quint64 m_pendingMatchKey = 0;
+    QString m_pendingMatchOpponent;
 };
 
 } // namespace UserInterface

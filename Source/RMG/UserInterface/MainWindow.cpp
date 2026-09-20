@@ -1577,6 +1577,40 @@ std::array<std::string, 4> GetLiveKailleraPortLabelNames()
 #endif // NETPLAY
 } // namespace
 
+// Auto-launches live_reader.py hidden (no console window) alongside RMG-K, so
+// every player's match feeds the website's live stats/rank tracking without
+// them ever having to run it themselves. Best-effort: if Python isn't
+// installed on this machine, CreateProcess just fails silently and the rest
+// of the emulator is unaffected — this never blocks startup.
+static void LaunchLiveStatsReaderHidden()
+{
+    const wchar_t* scriptPath = L"C:\\SmashRemixLiveStats\\live_reader.py";
+    if (GetFileAttributesW(scriptPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        return; // not installed on this machine
+    }
+
+    std::wstring cmdLine = L"pythonw \"";
+    cmdLine += scriptPath;
+    cmdLine += L"\"";
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+
+    // CREATE_NO_WINDOW: belt-and-suspenders alongside SW_HIDE — pythonw has no
+    // console anyway, but this also suppresses one if PATH resolves to the
+    // console python.exe instead on some installs.
+    if (CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, L"C:\\SmashRemixLiveStats", &si, &pi))
+    {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
 MainWindow::MainWindow() : QMainWindow(nullptr)
 {
 }
@@ -5065,6 +5099,13 @@ void MainWindow::on_Lobby_SessionRequested(QString gameName, QString romFile, QS
         CoreAddCallbackMessage(CoreDebugMessageType::Info, buf);
     }
 
+    // No-op unless a challenge handoff is pending (on_OnlineBridge_ChallengeRoomReady):
+    // finalizes the match identity live_reader.py reads to report wins/losses.
+    if (this->onlineBridge != nullptr)
+    {
+        this->onlineBridge->recordMatchStarted(localPlayer);
+    }
+
     // The lobby resolved romFile from the room's MD5 (localRomPathForMd5), so it
     // points at the byte-identical ROM every seat verified they have — including
     // romhacks absent from the database, where findRomByName(gameName) fails
@@ -5641,6 +5682,12 @@ void MainWindow::on_Emulation_Finished(bool ret, QString error)
     {
         // No-op when no lobby-driven match is in progress.
         this->rollbackLobbyDialog->notifyEmulationFinished();
+    }
+    if (this->onlineBridge != nullptr)
+    {
+        // No-op unless a challenge match was active; avoids a later local
+        // practice session being mistaken for a ranked one.
+        this->onlineBridge->clearActiveChallengeMatch();
     }
     OnScreenDisplayClearKailleraPortLabels();
 #endif // NETPLAY

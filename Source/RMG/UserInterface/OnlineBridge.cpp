@@ -302,6 +302,7 @@ void OnlineBridge::sendChallenge(uint32_t requestId, const QString& targetNickna
     }
 
     m_pendingRoomRequestId = requestId;
+    m_lastChallengeTargetNickname = targetNickname;
     const QString roomName = QString(CHALLENGE_ROOM_PREFIX) + targetNickname;
     m_lobbyClient->createRoom(
         roomName,
@@ -332,7 +333,7 @@ void OnlineBridge::onLobbyRoomCreated(quint64 roomId)
         writeStatus(m_pendingRoomRequestId, ONLINE_BRIDGE_STATUS_FOUND);
         m_pendingRoomRequestId = 0;
     }
-    handOffRoomToLobbyDialog(roomId, /*isHost=*/true);
+    handOffRoomToLobbyDialog(roomId, /*isHost=*/true, m_lastChallengeTargetNickname);
 }
 
 void OnlineBridge::onLobbyRoomCreateFailed(const QString& reason)
@@ -352,14 +353,16 @@ void OnlineBridge::onLobbyRoomJoinOk(quint64 roomId)
         writeStatus(m_pendingRoomRequestId, ONLINE_BRIDGE_STATUS_FOUND);
         m_pendingRoomRequestId = 0;
     }
-    // Ya en la sala; limpiar el aviso de desafio pendiente.
+    // Ya en la sala; capturar quien nos reto (para el reporte de resultado)
+    // antes de limpiar el aviso pendiente.
+    const QString opponent = m_incomingChallengerName;
     m_incomingChallengeRoomId = 0;
     m_incomingChallengerName.clear();
     if (m_shared != nullptr)
     {
         memset(m_shared->incomingChallenger, 0, sizeof(m_shared->incomingChallenger));
     }
-    handOffRoomToLobbyDialog(roomId, /*isHost=*/false);
+    handOffRoomToLobbyDialog(roomId, /*isHost=*/false, opponent);
 }
 
 // La sala ya existe en el servidor (creada o unida por esta misma conexion
@@ -369,14 +372,48 @@ void OnlineBridge::onLobbyRoomJoinOk(quint64 roomId)
 // no este puente headless. Por eso soltamos esta conexion (el servidor no
 // admite dos sesiones con el mismo nickname a la vez) y le avisamos a
 // MainWindow para que abra ese dialogo y se una a la misma sala por id.
-void OnlineBridge::handOffRoomToLobbyDialog(quint64 roomId, bool isHost)
+//
+// La identidad de la partida (matchKey/oponente) queda en espera aca --
+// todavia no sabemos que puerto local nos va a tocar, eso lo confirma
+// recordMatchStarted() cuando el matchReady real llega.
+void OnlineBridge::handOffRoomToLobbyDialog(quint64 roomId, bool isHost, const QString& opponentNickname)
 {
     const QString nickname = m_myNickname;
+    m_pendingMatchKey = roomId;
+    m_pendingMatchOpponent = opponentNickname;
     if (m_lobbyClient != nullptr)
     {
         m_lobbyClient->disconnectFromServer();
     }
     emit challengeRoomReady(roomId, nickname, isHost);
+}
+
+void OnlineBridge::recordMatchStarted(int localPort)
+{
+    if (m_pendingMatchKey == 0 || m_shared == nullptr)
+    {
+        return;
+    }
+
+    m_shared->matchKey = static_cast<uint32_t>(m_pendingMatchKey);
+    m_shared->myPort = static_cast<uint32_t>(localPort);
+    memset(m_shared->matchOpponentNickname, 0, sizeof(m_shared->matchOpponentNickname));
+    const QByteArray utf8 = m_pendingMatchOpponent.toUtf8().left(23);
+    memcpy(m_shared->matchOpponentNickname, utf8.constData(), utf8.size());
+
+    m_pendingMatchKey = 0;
+    m_pendingMatchOpponent.clear();
+}
+
+void OnlineBridge::clearActiveChallengeMatch()
+{
+    if (m_shared == nullptr)
+    {
+        return;
+    }
+    m_shared->matchKey = 0;
+    m_shared->myPort = 0;
+    memset(m_shared->matchOpponentNickname, 0, sizeof(m_shared->matchOpponentNickname));
 }
 
 void OnlineBridge::onLobbyRoomJoinFailed(const QString& reason)
