@@ -251,6 +251,21 @@ void OnlineBridge::onRankLookupReply(QNetworkReply* reply)
 void OnlineBridge::onLobbyRoomListChanged()
 {
     checkIncomingChallenge();
+
+    // ¿El rival ya entro a la sala que cree para desafiarlo? Recien ahi
+    // hacemos el handoff -- ver el comentario en handOffRoomToLobbyDialog.
+    if (m_hostedChallengeRoomId != 0 && m_lobbyClient != nullptr)
+    {
+        const auto it = m_lobbyClient->rooms().constFind(m_hostedChallengeRoomId);
+        if (it != m_lobbyClient->rooms().constEnd() && it->players >= 2)
+        {
+            const quint64 roomId = m_hostedChallengeRoomId;
+            const QString opponent = m_hostedChallengeOpponent;
+            m_hostedChallengeRoomId = 0;
+            m_hostedChallengeOpponent.clear();
+            handOffRoomToLobbyDialog(roomId, /*isHost=*/true, opponent);
+        }
+    }
 }
 
 void OnlineBridge::checkIncomingChallenge()
@@ -333,7 +348,13 @@ void OnlineBridge::onLobbyRoomCreated(quint64 roomId)
         writeStatus(m_pendingRoomRequestId, ONLINE_BRIDGE_STATUS_FOUND);
         m_pendingRoomRequestId = 0;
     }
-    handOffRoomToLobbyDialog(roomId, /*isHost=*/true, m_lastChallengeTargetNickname);
+    // No hacemos el handoff todavia -- si nos desconectamos ahora mismo (como
+    // hacia antes este codigo), el rival puede no alcanzar a ver la sala en
+    // su lista antes de que desaparezca. Nos quedamos conectados, sosteniendo
+    // la sala abierta, hasta que onLobbyRoomListChanged detecte que ya entro
+    // (players >= 2).
+    m_hostedChallengeRoomId = roomId;
+    m_hostedChallengeOpponent = m_lastChallengeTargetNickname;
 }
 
 void OnlineBridge::onLobbyRoomCreateFailed(const QString& reason)

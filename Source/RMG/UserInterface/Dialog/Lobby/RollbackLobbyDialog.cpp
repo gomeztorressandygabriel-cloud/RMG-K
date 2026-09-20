@@ -2909,6 +2909,7 @@ void RollbackLobbyDialog::onRoomListChanged()
 void RollbackLobbyDialog::autoJoinRoomOnConnect(quint64 roomId)
 {
     m_pendingAutoJoinRoomId = roomId;
+    m_autoStartPending = true;
     tryAutoJoinPendingRoom();
 }
 
@@ -2965,6 +2966,7 @@ void RollbackLobbyDialog::clearServerRoomSnapshot()
             seat.dragHandle->setVisible(false);
     }
     m_canReorderSeats = false;
+    m_autoStartPending = false;
 
     m_currentRoomId = 0;
     m_currentRoomGame.clear();
@@ -3616,6 +3618,15 @@ void RollbackLobbyDialog::refreshStartButton()
         : !enoughPlayers ? QStringLiteral("Need at least 2 players to start.")
         : !pingsReady    ? QStringLiteral("Measuring every player-to-player path…")
                          : QString());
+
+    // A challenge-originated room (see autoJoinRoomOnConnect) starts itself
+    // the moment it's startable, exactly like clicking "Start Game" -- so
+    // accepting a challenge connects straight into the match.
+    if (m_autoStartPending && canStart)
+    {
+        m_autoStartPending = false;
+        onStartGameClicked();
+    }
 }
 
 void RollbackLobbyDialog::onDropGameClicked()
@@ -4042,6 +4053,7 @@ void RollbackLobbyDialog::onRoomLeft(const QString& reason)
     for (auto& s : m_seats)
         s.userId = 0;
 
+    m_autoStartPending = false;
     m_currentRoomId = 0;
     m_currentRoomGame.clear();
     m_currentRoomRegion.clear();

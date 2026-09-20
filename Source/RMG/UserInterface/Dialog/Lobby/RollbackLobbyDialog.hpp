@@ -473,6 +473,13 @@ private:
     // nothing is queued. See autoJoinRoomOnConnect / tryAutoJoinPendingRoom.
     quint64  m_pendingAutoJoinRoomId = 0;
 
+    // True for a room that came from an in-game challenge (OnlineBridge),
+    // set by autoJoinRoomOnConnect. Once this room becomes startable (see
+    // refreshStartButton's canStart), the host side starts it automatically
+    // -- no one has to click "Start Game" -- so accepting a challenge feels
+    // like a call connecting, not like navigating a lobby screen.
+    bool     m_autoStartPending = false;
+
     QString m_currentRoomGame;
     QString m_currentRoomMd5;
     QString m_currentRoomRegion;

@@ -175,6 +175,15 @@ class OnlineBridge : public QObject
     // pending.
     quint64 m_pendingMatchKey = 0;
     QString m_pendingMatchOpponent;
+
+    // Room I just created for a challenge I sent, still waiting for the
+    // target to actually join. Kept connected (NOT handed off yet) so the
+    // room stays visible in their room list -- disconnecting immediately on
+    // creation was the bug: it could yank the room away before their client
+    // ever refreshed and saw it. onLobbyRoomListChanged finishes the handoff
+    // once this room reaches 2 players. 0 = nothing pending.
+    quint64 m_hostedChallengeRoomId = 0;
+    QString m_hostedChallengeOpponent;
 };
 
 } // namespace UserInterface
