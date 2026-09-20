@@ -1617,6 +1617,9 @@ bool MainWindow::Init(QApplication* app, bool showUI, bool launchROM)
     this->onlineBridge = new OnlineBridge(this);
 
 #ifdef NETPLAY
+    connect(this->onlineBridge, &OnlineBridge::challengeRoomReady,
+            this, &MainWindow::on_OnlineBridge_ChallengeRoomReady);
+
     this->refreshKailleraRecordingStorageStatus(true);
 #endif // NETPLAY
 
@@ -4892,6 +4895,28 @@ void MainWindow::ensureRollbackLobbyDialog()
             this, []() { OnScreenDisplaySetLiveReplayStatus(""); });
 }
 #endif
+
+void MainWindow::on_OnlineBridge_ChallengeRoomReady(quint64 roomId, QString nickname, bool isHost)
+{
+    Q_UNUSED(isHost);
+
+    // The room already exists on the server (created/joined by OnlineBridge's
+    // own hidden connection, which just disconnected to free the nickname).
+    // Pre-fill the lobby's saved username so its own connection comes back up
+    // as the same identity instead of whatever this machine last used
+    // manually — RollbackLobbyDialog::prefillUsername() reads this same key.
+    if (!nickname.isEmpty())
+    {
+        QSettings("RMG-K", "n02").setValue("Lobby/Username", nickname);
+    }
+
+    this->ensureRollbackLobbyDialog();
+    this->rollbackLobbyDialog->setRomLibrary(this->ui_Widget_RomBrowser->GetModelData());
+    this->rollbackLobbyDialog->autoJoinRoomOnConnect(roomId);
+    this->rollbackLobbyDialog->show();
+    this->rollbackLobbyDialog->raise();
+    this->rollbackLobbyDialog->activateWindow();
+}
 
 void MainWindow::on_Action_Rollback_Lobby(void)
 {

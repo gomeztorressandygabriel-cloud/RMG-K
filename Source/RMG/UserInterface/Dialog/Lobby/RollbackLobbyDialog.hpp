@@ -72,6 +72,13 @@ public:
     // stopped) so the server can drop us from the broadcast. Idempotent.
     void stopSpectating();
 
+    // Programmatic join used by the in-game challenge flow (OnlineBridge):
+    // once this dialog's own lobby connection reaches Connected and the room
+    // shows up in its room-list snapshot, joins it exactly as a manual
+    // double-click on the Active Rooms list would. Safe to call before the
+    // dialog is even connected — it queues until both conditions are met.
+    void autoJoinRoomOnConnect(quint64 roomId);
+
 signals:
     // Fired when the server has issued MATCH_BEGIN. Each entry in remotePeers
     // is pre-formatted as "<slot>,<ip>,<port>" — matches the LOBBY| address
@@ -318,6 +325,12 @@ private:
     // the ROM at match start so both use identical matching.
     QString localRomPathForMd5(const QString& md5) const;
 
+    // Retries the join queued by autoJoinRoomOnConnect once we're connected
+    // and the target room appears in our local room-list snapshot. No-op if
+    // there's nothing pending. Called from onRoomListChanged and right after
+    // autoJoinRoomOnConnect itself (in case both conditions are already met).
+    void tryAutoJoinPendingRoom();
+
     // Cleanly abort a match that failed before emulation started (ROM missing or
     // pre-match sync failed/timed out): reset await state, tell the server the
     // match is over so the room returns to "waiting", reopen the ping anchor,
@@ -455,6 +468,10 @@ private:
     QString  m_lastRoomName;
     QString  m_serverUrl;
     quint64  m_currentRoomId = 0;
+
+    // Room id an in-game challenge asked us to join once connected; 0 when
+    // nothing is queued. See autoJoinRoomOnConnect / tryAutoJoinPendingRoom.
+    quint64  m_pendingAutoJoinRoomId = 0;
 
     QString m_currentRoomGame;
     QString m_currentRoomMd5;

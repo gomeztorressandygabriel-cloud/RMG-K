@@ -184,6 +184,10 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     QString ui_SpectateSavedTitle;          // window title to restore after catch-up (bar lives in the title while headless)
     // Lazily creates rollbackLobbyDialog and wires its signals (once).
     void ensureRollbackLobbyDialog();
+    // OnlineBridge::challengeRoomReady handler: opens the real Rollback Lobby
+    // dialog and joins the challenge room there, since that dialog (not the
+    // headless bridge) owns the actual match-start pipeline.
+    void on_OnlineBridge_ChallengeRoomReady(quint64 roomId, QString nickname, bool isHost);
     // Creates the KailleraSessionManager + callback wiring if absent. Shared by
     // the playback dialog and the lobby spectate path (both drive n02 mode 2).
     void ensureKailleraSessionManager();

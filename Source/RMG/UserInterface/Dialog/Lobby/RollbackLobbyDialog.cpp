@@ -2903,6 +2903,33 @@ void RollbackLobbyDialog::onRoomListChanged()
     }
     updateServerMeta();
     updateInRoomBanner();   // seat counts may have changed in our own room
+    tryAutoJoinPendingRoom();
+}
+
+void RollbackLobbyDialog::autoJoinRoomOnConnect(quint64 roomId)
+{
+    m_pendingAutoJoinRoomId = roomId;
+    tryAutoJoinPendingRoom();
+}
+
+void RollbackLobbyDialog::tryAutoJoinPendingRoom()
+{
+    if (m_pendingAutoJoinRoomId == 0)
+        return;
+    if (!m_client || m_client->state() != LobbyClient::ConnectionState::Connected)
+        return;
+    if (m_currentRoomId != 0)
+    {
+        // Already seated (e.g. joined manually first) — drop the stale request.
+        m_pendingAutoJoinRoomId = 0;
+        return;
+    }
+    if (!m_client->rooms().contains(m_pendingAutoJoinRoomId))
+        return; // not in our snapshot yet; the next onRoomListChanged retries
+
+    const quint64 roomId = m_pendingAutoJoinRoomId;
+    m_pendingAutoJoinRoomId = 0;
+    m_client->joinRoom(roomId);
 }
 
 void RollbackLobbyDialog::updateMatchDurations()

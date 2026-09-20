@@ -81,6 +81,14 @@ class OnlineBridge : public QObject
     explicit OnlineBridge(QObject* parent = nullptr);
     ~OnlineBridge() override;
 
+  signals:
+    // A challenge room is ready to actually play: MainWindow should open the
+    // real Rollback Lobby dialog and join this exact room id there, since
+    // that dialog (not this headless bridge) owns the ICE/ping/match-start
+    // pipeline. isHost only affects nothing functionally today (join is by
+    // room id either way) but is handed along for any future UI hint.
+    void challengeRoomReady(quint64 roomId, QString nickname, bool isHost);
+
   private slots:
     void pollSharedMemory();
     void onResolveCodeReply(QNetworkReply* reply);
@@ -104,6 +112,7 @@ class OnlineBridge : public QObject
     void checkIncomingChallenge();
     void sendChallenge(uint32_t requestId, const QString& targetNickname);
     void acceptChallenge(uint32_t requestId);
+    void handOffRoomToLobbyDialog(quint64 roomId, bool isHost);
 
     HANDLE m_mapping = nullptr;
     OnlineBridgeShared* m_shared = nullptr;

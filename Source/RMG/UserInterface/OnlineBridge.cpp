@@ -327,16 +327,12 @@ void OnlineBridge::acceptChallenge(uint32_t requestId)
 
 void OnlineBridge::onLobbyRoomCreated(quint64 roomId)
 {
-    Q_UNUSED(roomId);
     if (m_pendingRoomRequestId != 0)
     {
         writeStatus(m_pendingRoomRequestId, ONLINE_BRIDGE_STATUS_FOUND);
         m_pendingRoomRequestId = 0;
     }
-    // TODO (siguiente paso): una vez que el otro jugador se una, disparar
-    // el arranque real de la partida (matchReady -> CoreInitNetplay). Hoy
-    // la sala queda "esperando" -- ver RollbackLobbyDialog::onRoomJoinOk /
-    // onStartGameClicked para el flujo completo que falta enganchar aca.
+    handOffRoomToLobbyDialog(roomId, /*isHost=*/true);
 }
 
 void OnlineBridge::onLobbyRoomCreateFailed(const QString& reason)
@@ -351,7 +347,6 @@ void OnlineBridge::onLobbyRoomCreateFailed(const QString& reason)
 
 void OnlineBridge::onLobbyRoomJoinOk(quint64 roomId)
 {
-    Q_UNUSED(roomId);
     if (m_pendingRoomRequestId != 0)
     {
         writeStatus(m_pendingRoomRequestId, ONLINE_BRIDGE_STATUS_FOUND);
@@ -364,6 +359,24 @@ void OnlineBridge::onLobbyRoomJoinOk(quint64 roomId)
     {
         memset(m_shared->incomingChallenger, 0, sizeof(m_shared->incomingChallenger));
     }
+    handOffRoomToLobbyDialog(roomId, /*isHost=*/false);
+}
+
+// La sala ya existe en el servidor (creada o unida por esta misma conexion
+// oculta). A partir de aca, el arranque real de la partida -- ICE, ping,
+// asignacion de seats, sincronizacion pre-match -- lo maneja el
+// RollbackLobbyDialog real (ver RollbackLobbyDialog::autoJoinRoomOnConnect),
+// no este puente headless. Por eso soltamos esta conexion (el servidor no
+// admite dos sesiones con el mismo nickname a la vez) y le avisamos a
+// MainWindow para que abra ese dialogo y se una a la misma sala por id.
+void OnlineBridge::handOffRoomToLobbyDialog(quint64 roomId, bool isHost)
+{
+    const QString nickname = m_myNickname;
+    if (m_lobbyClient != nullptr)
+    {
+        m_lobbyClient->disconnectFromServer();
+    }
+    emit challengeRoomReady(roomId, nickname, isHost);
 }
 
 void OnlineBridge::onLobbyRoomJoinFailed(const QString& reason)
