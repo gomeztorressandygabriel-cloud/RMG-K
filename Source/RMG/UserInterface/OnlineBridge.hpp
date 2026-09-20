@@ -84,6 +84,7 @@ class OnlineBridge : public QObject
   private slots:
     void pollSharedMemory();
     void onResolveCodeReply(QNetworkReply* reply);
+    void onRankLookupReply(QNetworkReply* reply);
 
     // Lobby presence + rooms (mirrors Dialog::LobbyClient's own signals)
     void onLobbyPresenceChanged();
@@ -99,6 +100,7 @@ class OnlineBridge : public QObject
     void writeStatus(uint32_t requestId, uint32_t status, const QString& nickname = QString());
     void connectToLobbyIfNeeded();
     void refreshPresence();
+    void fetchRanksForPresence(const QStringList& nicknames);
     void checkIncomingChallenge();
     void sendChallenge(uint32_t requestId, const QString& targetNickname);
     void acceptChallenge(uint32_t requestId);
@@ -107,8 +109,13 @@ class OnlineBridge : public QObject
     OnlineBridgeShared* m_shared = nullptr;
     QTimer* m_pollTimer = nullptr;
     QNetworkAccessManager* m_network = nullptr;
+    QNetworkAccessManager* m_rankNetwork = nullptr; // separate manager: its own "finished" signal, distinct from resolve_code
     uint32_t m_lastSeenRequestId = 0;
     bool m_requestInFlight = false;
+
+    // Raw nicknames from the last presence refresh, kept until the rank
+    // lookup replies so the display order matches what the player just saw.
+    QStringList m_pendingPresenceNicknames;
 
     // Once a code resolves we know the player's public nickname; that's what
     // we log into the lobby with (same identity as everywhere else on the site).

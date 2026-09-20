@@ -11,6 +11,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QByteArray>
+#include <QUrl>
+#include <QHash>
 
 namespace UserInterface
 {
@@ -31,6 +33,20 @@ static const char* const LOBBY_SERVER_URL = "ws://216.128.157.98:8080/ws";
 // own bridge watches the room list for one addressed to them.
 static const char* const CHALLENGE_ROOM_PREFIX = "RETO:";
 
+// Replica los mismos umbrales que src/js/config.js en la pagina web, para que
+// el rango mostrado en el juego siempre coincida con el sitio.
+static QString tierForPoints(double points)
+{
+    if (points >= 300) return QStringLiteral("S");
+    if (points >= 200) return QStringLiteral("A+");
+    if (points >= 160) return QStringLiteral("A");
+    if (points >= 100) return QStringLiteral("B+");
+    if (points >= 80)  return QStringLiteral("B");
+    if (points >= 50)  return QStringLiteral("C+");
+    if (points >= 30)  return QStringLiteral("C");
+    return QStringLiteral("D");
+}
+
 OnlineBridge::OnlineBridge(QObject* parent) : QObject(parent)
 {
     if (!openSharedMemory())
@@ -40,6 +56,9 @@ OnlineBridge::OnlineBridge(QObject* parent) : QObject(parent)
 
     m_network = new QNetworkAccessManager(this);
     connect(m_network, &QNetworkAccessManager::finished, this, &OnlineBridge::onResolveCodeReply);
+
+    m_rankNetwork = new QNetworkAccessManager(this);
+    connect(m_rankNetwork, &QNetworkAccessManager::finished, this, &OnlineBridge::onRankLookupReply);
 
     m_lobbyClient = new Dialog::LobbyClient(this);
     connect(m_lobbyClient, &Dialog::LobbyClient::stateChanged, this, &OnlineBridge::onLobbyStateChanged);
@@ -139,6 +158,7 @@ void OnlineBridge::refreshPresence()
 
     const auto& users = m_lobbyClient->users();
     uint32_t count = 0;
+    QStringList rawNicknames;
     memset(m_shared->onlineNicknames, 0, sizeof(m_shared->onlineNicknames));
 
     for (auto it = users.constBegin(); it != users.constEnd() && count < ONLINE_BRIDGE_MAX_PRESENCE; ++it)
@@ -147,7 +167,81 @@ void OnlineBridge::refreshPresence()
         {
             continue; // no listarme a mi mismo
         }
+        // Mostrar el nickname solo mientras se resuelve el rango; se
+        // reemplaza por "{rango} {nickname}" en cuanto responda Supabase.
         const QByteArray utf8 = it->username.toUtf8().left(23);
+        memcpy(m_shared->onlineNicknames[count], utf8.constData(), utf8.size());
+        rawNicknames << it->username;
+        count++;
+    }
+    m_shared->onlineCount = count;
+
+    m_pendingPresenceNicknames = rawNicknames;
+    fetchRanksForPresence(rawNicknames);
+}
+
+void OnlineBridge::fetchRanksForPresence(const QStringList& nicknames)
+{
+    if (m_rankNetwork == nullptr || nicknames.isEmpty())
+    {
+        return;
+    }
+
+    QStringList encoded;
+    for (const QString& nick : nicknames)
+    {
+        encoded << QString::fromUtf8(QUrl::toPercentEncoding(nick));
+    }
+
+    const QString filter = QStringLiteral("nickname=in.(%1)").arg(encoded.join(QStringLiteral(",")));
+    QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/profiles?select=nickname,rank_points&%2")
+        .arg(SUPABASE_URL, filter)));
+    req.setRawHeader("apikey", SUPABASE_ANON_KEY);
+    req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
+
+    m_rankNetwork->get(req);
+}
+
+void OnlineBridge::onRankLookupReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+
+    if (m_shared == nullptr)
+    {
+        return;
+    }
+
+    QHash<QString, double> pointsByNickname;
+    if (reply->error() == QNetworkReply::NoError)
+    {
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        if (doc.isArray())
+        {
+            for (const QJsonValue& v : doc.array())
+            {
+                const QJsonObject row = v.toObject();
+                pointsByNickname[row["nickname"].toString()] = row["rank_points"].toDouble();
+            }
+        }
+    }
+    // Si fallo la consulta, pointsByNickname queda vacio y cada nombre se
+    // muestra tal cual (sin rango) en vez de trabarse esperando.
+
+    uint32_t count = 0;
+    memset(m_shared->onlineNicknames, 0, sizeof(m_shared->onlineNicknames));
+    for (const QString& nick : m_pendingPresenceNicknames)
+    {
+        if (count >= ONLINE_BRIDGE_MAX_PRESENCE)
+        {
+            break;
+        }
+        QString line = nick;
+        const auto found = pointsByNickname.constFind(nick);
+        if (found != pointsByNickname.constEnd())
+        {
+            line = QStringLiteral("%1 %2").arg(tierForPoints(found.value()), nick);
+        }
+        const QByteArray utf8 = line.toUtf8().left(23);
         memcpy(m_shared->onlineNicknames[count], utf8.constData(), utf8.size());
         count++;
     }
