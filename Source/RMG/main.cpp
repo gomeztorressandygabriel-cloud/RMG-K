@@ -237,6 +237,14 @@ int main(int argc, char **argv)
     QCommandLineOption exportNoKailleraChatOption("export-no-kaillera-chat", "Internal replay export mode: hide Kaillera chat overlay");
     QCommandLineOption exportLabelPortsOption("export-label-ports", "Internal replay export mode: label controller ports");
     QCommandLineOption exportVerboseOption("export-verbose", "Internal replay export mode: verbose export logging");
+#ifdef NETPLAY
+    QCommandLineOption joinLobbyRoomOption("join-lobby-room",
+        "Internal: used by the standalone Launcher to join a matched lobby room automatically", "roomId");
+    QCommandLineOption lobbyNicknameOption("lobby-nickname",
+        "Internal: nickname to use when auto-joining a lobby room", "nickname");
+    joinLobbyRoomOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyNicknameOption.setFlags(QCommandLineOption::HiddenFromHelp);
+#endif // NETPLAY
     exportKrecOption.setFlags(QCommandLineOption::HiddenFromHelp);
     exportRomOption.setFlags(QCommandLineOption::HiddenFromHelp);
     exportOutputOption.setFlags(QCommandLineOption::HiddenFromHelp);
@@ -268,6 +276,10 @@ int main(int argc, char **argv)
     parser.addOption(exportNoKailleraChatOption);
     parser.addOption(exportLabelPortsOption);
     parser.addOption(exportVerboseOption);
+#ifdef NETPLAY
+    parser.addOption(joinLobbyRoomOption);
+    parser.addOption(lobbyNicknameOption);
+#endif // NETPLAY
     parser.addPositionalArgument("ROM", "ROM to open");
 
     // parse arguments
@@ -348,6 +360,19 @@ int main(int argc, char **argv)
 
                 window.OpenROM(args.at(0), parser.value(diskOption), parser.isSet(fullscreenOption), parser.isSet(quitAfterEmulationOption), saveStateSlot);
             }
+
+#ifdef NETPLAY
+            if (parser.isSet(joinLobbyRoomOption) && parser.isSet(lobbyNicknameOption))
+            {
+                bool parsedRoomId = false;
+                const quint64 roomId = parser.value(joinLobbyRoomOption).toULongLong(&parsedRoomId);
+                const QString nickname = parser.value(lobbyNicknameOption);
+                if (parsedRoomId && roomId != 0 && !nickname.isEmpty())
+                {
+                    window.autoJoinChallengeRoom(roomId, nickname);
+                }
+            }
+#endif // NETPLAY
 
             // show window
             window.show();

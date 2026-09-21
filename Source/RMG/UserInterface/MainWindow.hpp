@@ -60,6 +60,12 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     void OpenROM(QString file, QString disk, bool fullscreen, bool quitAfterEmulation, int stateSlot);
 #ifdef NETPLAY
     QString ResolveKailleraRomByName(QString gameName);
+    // Called once at startup (see main.cpp's --join-lobby-room option) when
+    // RMG-K was launched by the standalone Launcher app rather than by the
+    // player. Connects straight to that lobby room under `nickname`, with
+    // the Lobby dialog never shown -- the player only sees the game once
+    // matchReady fires.
+    void autoJoinChallengeRoom(quint64 roomId, const QString& nickname);
 #endif
 
   private:

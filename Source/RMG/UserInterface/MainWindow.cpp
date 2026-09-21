@@ -4952,6 +4952,17 @@ void MainWindow::on_OnlineBridge_ChallengeRoomReady(quint64 roomId, QString nick
     this->rollbackLobbyDialog->activateWindow();
 }
 
+void MainWindow::autoJoinChallengeRoom(quint64 roomId, const QString& nickname)
+{
+    this->ensureRollbackLobbyDialog();
+    this->rollbackLobbyDialog->connectAutomatically(nickname);
+    this->rollbackLobbyDialog->autoJoinRoomOnConnect(roomId);
+    // Deliberately no show()/setRomLibrary() here -- this dialog must stay
+    // invisible for the Launcher-driven flow. Its own timers/signals still
+    // run regardless of visibility; only matchReady (which shows the actual
+    // game) should ever become visible to the player in this flow.
+}
+
 void MainWindow::on_Action_Rollback_Lobby(void)
 {
 #ifdef NETPLAY

@@ -79,6 +79,14 @@ public:
     // dialog is even connected — it queues until both conditions are met.
     void autoJoinRoomOnConnect(quint64 roomId);
 
+    // Connects straight to the production lobby as `username`, with no
+    // modal prompt -- used by the --join-lobby-room startup flow (launched
+    // by the standalone Launcher, which already resolved the player's
+    // identity). No-op if already connected/connecting. This dialog is
+    // never shown in that flow: the player should only ever see the actual
+    // game once matchReady fires, not a Lobby window.
+    void connectAutomatically(const QString& username);
+
 signals:
     // Fired when the server has issued MATCH_BEGIN. Each entry in remotePeers
     // is pre-formatted as "<slot>,<ip>,<port>" — matches the LOBBY| address

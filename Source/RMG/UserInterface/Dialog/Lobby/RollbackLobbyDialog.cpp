@@ -2913,6 +2913,25 @@ void RollbackLobbyDialog::autoJoinRoomOnConnect(quint64 roomId)
     tryAutoJoinPendingRoom();
 }
 
+void RollbackLobbyDialog::connectAutomatically(const QString& username)
+{
+    if (!m_client || username.isEmpty())
+        return;
+    if (m_client->state() == LobbyClient::ConnectionState::Connected ||
+        m_client->state() == LobbyClient::ConnectionState::Connecting ||
+        m_client->state() == LobbyClient::ConnectionState::Authenticating)
+        return;
+
+    m_username = username;
+    m_serverUrl = QStringLiteral("ws://216.128.157.98:8080/ws");
+    if (m_userLabel)
+        m_userLabel->setText(QString("User: %1").arg(m_username));
+
+    clearServerRoomSnapshot();
+    updateServerMeta();
+    m_client->connectToServer(m_serverUrl, m_username, {}, QString());
+}
+
 void RollbackLobbyDialog::tryAutoJoinPendingRoom()
 {
     if (m_pendingAutoJoinRoomId == 0)
