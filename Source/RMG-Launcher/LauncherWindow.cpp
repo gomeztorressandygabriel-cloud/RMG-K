@@ -18,6 +18,8 @@
 #include <QJsonArray>
 #include <QUrl>
 #include <QByteArray>
+#include <QDesktopServices>
+#include <QColor>
 
 // Misma anon key publica que usa la web (config.js) y RMG-K (OnlineBridge.cpp)
 // -- nunca la service_role key.
@@ -36,6 +38,8 @@ static const char* const CHALLENGE_ROOM_PREFIX = "RETO:";
 // Este launcher es especifico de Smash Remix -- no hay selector de ROM.
 static const char* const SMASH_REMIX_ROM_NAME = "SMASH REMIX";
 static const char* const SMASH_REMIX_ROM_MD5 = "8d72d42b5fa390b0d5e84b5f62b24c9c";
+
+static const char* const WEBSITE_URL = "https://smashremix.netlify.app/";
 
 // Replica los mismos umbrales que src/js/config.js en la pagina web.
 static QString tierForPoints(double points)
@@ -61,8 +65,19 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
     m_network = new QNetworkAccessManager(this);
     connect(m_network, &QNetworkAccessManager::finished, this, &LauncherWindow::onResolveCodeReply);
 
-    m_rankNetwork = new QNetworkAccessManager(this);
-    connect(m_rankNetwork, &QNetworkAccessManager::finished, this, &LauncherWindow::onRankLookupReply);
+    m_rosterNetwork = new QNetworkAccessManager(this);
+    connect(m_rosterNetwork, &QNetworkAccessManager::finished, this, &LauncherWindow::onFullRosterReply);
+
+    m_friendsNetwork = new QNetworkAccessManager(this);
+    connect(m_friendsNetwork, &QNetworkAccessManager::finished, this, [this](QNetworkReply* reply) {
+        const QString op = reply->property("op").toString();
+        if (op == QStringLiteral("send"))
+            onSendFriendRequestReply(reply);
+        else if (op == QStringLiteral("respond"))
+            onRespondFriendRequestReply(reply);
+        else
+            onListFriendsReply(reply);
+    });
 
     m_lobbyClient = new LobbyClient(this);
     connect(m_lobbyClient, &LobbyClient::stateChanged, this, &LauncherWindow::onLobbyStateChanged);
@@ -77,6 +92,8 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
     connect(m_lobbyClient, &LobbyClient::roomCreateFailed, this, &LauncherWindow::onLobbyRoomCreateFailed);
     connect(m_lobbyClient, &LobbyClient::roomJoinOk, this, &LauncherWindow::onLobbyRoomJoinOk);
     connect(m_lobbyClient, &LobbyClient::roomJoinFailed, this, &LauncherWindow::onLobbyRoomJoinFailed);
+
+    fetchFullRoster();
 
     const QString savedCode = QSettings("RMG-K", "n02").value("Launcher/PlayerCode").toString();
     if (!savedCode.isEmpty())
@@ -110,6 +127,10 @@ void LauncherWindow::buildUi()
     auto* subtitle = new QLabel(QStringLiteral("LAUNCHER"), sidebar);
     subtitle->setObjectName("brandSubtitle");
     side->addWidget(subtitle);
+
+    m_websiteBtn = new QPushButton(QStringLiteral("Visitar la pagina web"), sidebar);
+    side->addWidget(m_websiteBtn);
+    connect(m_websiteBtn, &QPushButton::clicked, this, &LauncherWindow::onWebsiteButtonClicked);
 
     side->addSpacing(12);
 
@@ -152,6 +173,23 @@ void LauncherWindow::buildUi()
     connect(m_challengeBtn, &QPushButton::clicked, this, &LauncherWindow::onChallengeButtonClicked);
     connect(m_challengeTargetInput, &QLineEdit::returnPressed, this, &LauncherWindow::onChallengeButtonClicked);
 
+    side->addSpacing(12);
+
+    auto* friendLabel = new QLabel(QStringLiteral("AGREGAR AMIGO"), sidebar);
+    friendLabel->setObjectName("sectionLabel");
+    side->addWidget(friendLabel);
+
+    m_addFriendInput = new QLineEdit(sidebar);
+    m_addFriendInput->setPlaceholderText(QStringLiteral("Nickname"));
+    side->addWidget(m_addFriendInput);
+
+    m_addFriendBtn = new QPushButton(QStringLiteral("Agregar"), sidebar);
+    m_addFriendBtn->setEnabled(false);
+    side->addWidget(m_addFriendBtn);
+
+    connect(m_addFriendBtn, &QPushButton::clicked, this, &LauncherWindow::onAddFriendClicked);
+    connect(m_addFriendInput, &QLineEdit::returnPressed, this, &LauncherWindow::onAddFriendClicked);
+
     root->addWidget(sidebar);
 
     // ==================== Panel derecho: presencia ====================
@@ -182,8 +220,18 @@ void LauncherWindow::buildUi()
     connect(m_acceptBtn, &QPushButton::clicked, this, &LauncherWindow::onAcceptChallengeClicked);
     connect(m_declineBtn, &QPushButton::clicked, this, &LauncherWindow::onDeclineChallengeClicked);
 
+    auto* friendsLabel = new QLabel(QStringLiteral("-- AMIGOS --"), main);
+    friendsLabel->setObjectName("sectionLabel");
+    mainLayout->addWidget(friendsLabel);
+
+    m_friendsList = new QListWidget(main);
+    m_friendsList->setObjectName("friendsList");
+    m_friendsList->setSpacing(3);
+    m_friendsList->setFixedHeight(150);
+    mainLayout->addWidget(m_friendsList);
+
     auto* onlineHeader = new QHBoxLayout();
-    auto* onlineLabel = new QLabel(QStringLiteral("-- ONLINE --"), main);
+    auto* onlineLabel = new QLabel(QStringLiteral("-- JUGADORES --"), main);
     onlineLabel->setObjectName("sectionLabel");
     onlineHeader->addWidget(onlineLabel);
     onlineHeader->addStretch(1);
@@ -333,6 +381,10 @@ void LauncherWindow::onResolveCodeReply(QNetworkReply* reply)
 
     setStatus(QStringLiteral("Conectando al Lobby..."));
     m_lobbyClient->connectToServer(LOBBY_SERVER_URL, nickname, {});
+
+    m_addFriendBtn->setEnabled(true);
+    fetchFriends();
+    refreshRosterDisplay();
 }
 
 void LauncherWindow::onLobbyStateChanged(LobbyClient::ConnectionState state)
@@ -372,78 +424,242 @@ void LauncherWindow::onLobbyConnectError(const QString& message)
 
 void LauncherWindow::onLobbyPresenceChanged()
 {
-    refreshPresenceList();
+    // m_presenceList now shows the full registered roster (see
+    // refreshRosterDisplay), not just who's connected to the lobby right
+    // now -- presence changes still matter, they just drive that same
+    // roster's online/en-partida status instead of which rows exist.
+    refreshRosterDisplay();
+    refreshFriendsDisplay();
 }
 
-void LauncherWindow::refreshPresenceList()
+void LauncherWindow::fetchFullRoster()
+{
+    // Todos los jugadores registrados, no solo los conectados al launcher --
+    // no necesita estar logueado, se pide una sola vez al abrir.
+    QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/profiles?select=nickname,rank_points&order=rank_points.desc")
+        .arg(SUPABASE_URL)));
+    req.setRawHeader("apikey", SUPABASE_ANON_KEY);
+    req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
+    m_rosterNetwork->get(req);
+}
+
+void LauncherWindow::onFullRosterReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError)
+        return;
+
+    const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    if (!doc.isArray())
+        return;
+
+    m_fullRoster.clear();
+    for (const QJsonValue& v : doc.array())
+    {
+        const QJsonObject row = v.toObject();
+        RosterEntry entry;
+        entry.nickname = row.value("nickname").toString();
+        entry.rankPoints = row.value("rank_points").toDouble();
+        m_fullRoster.append(entry);
+    }
+
+    refreshRosterDisplay();
+}
+
+QString LauncherWindow::statusSuffixFor(const QString& nickname) const
 {
     if (m_lobbyClient == nullptr)
-        return;
+        return QString();
 
-    m_presenceList->clear();
-    QStringList nicknames;
-    for (auto it = m_lobbyClient->users().constBegin(); it != m_lobbyClient->users().constEnd(); ++it)
+    const auto& users = m_lobbyClient->users();
+    for (auto it = users.constBegin(); it != users.constEnd(); ++it)
     {
-        if (it->username == m_myNickname)
-            continue; // no listarme a mi mismo
-        nicknames << it->username;
+        if (it->username == nickname)
+        {
+            return it->state == QStringLiteral("playing")
+                ? QStringLiteral("  (en partida)")
+                : QStringLiteral("  (online)");
+        }
     }
-
-    for (const QString& nick : nicknames)
-    {
-        auto* item = new QListWidgetItem(m_presenceList);
-        item->setData(Qt::UserRole, nick);
-        item->setText(m_rankCache.contains(nick)
-            ? QStringLiteral("%1  %2").arg(tierForPoints(m_rankCache.value(nick)), nick)
-            : nick);
-    }
-
-    fetchRanksForPresence(nicknames);
+    return QString();
 }
 
-void LauncherWindow::fetchRanksForPresence(const QStringList& nicknames)
+void LauncherWindow::refreshRosterDisplay()
 {
-    if (nicknames.isEmpty())
+    m_presenceList->clear();
+
+    // Los conectados/jugando primero (siguen ordenados por rango dentro de
+    // cada grupo), para que resalten sin tener que buscarlos en la lista.
+    QList<const RosterEntry*> online;
+    QList<const RosterEntry*> offline;
+    for (const RosterEntry& entry : m_fullRoster)
+    {
+        if (entry.nickname == m_myNickname)
+            continue; // no listarme a mi mismo
+        (statusSuffixFor(entry.nickname).isEmpty() ? offline : online).append(&entry);
+    }
+
+    for (const RosterEntry* entry : online + offline)
+    {
+        auto* item = new QListWidgetItem(m_presenceList);
+        item->setData(Qt::UserRole, entry->nickname);
+        const QString suffix = statusSuffixFor(entry->nickname);
+        item->setText(QStringLiteral("%1  %2%3")
+            .arg(tierForPoints(entry->rankPoints), entry->nickname, suffix));
+        if (suffix.isEmpty())
+            item->setForeground(QColor(0x5a, 0x55, 0x48));
+    }
+}
+
+void LauncherWindow::fetchFriends()
+{
+    if (m_myCode.isEmpty())
         return;
 
-    QStringList encoded;
-    for (const QString& nick : nicknames)
-        encoded << QString::fromUtf8(QUrl::toPercentEncoding(nick));
-
-    const QString filter = QStringLiteral("nickname=in.(%1)").arg(encoded.join(QStringLiteral(",")));
-    QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/profiles?select=nickname,rank_points&%2")
-        .arg(SUPABASE_URL, filter)));
+    QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/rpc/list_friends").arg(SUPABASE_URL)));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setRawHeader("apikey", SUPABASE_ANON_KEY);
     req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
 
-    m_rankNetwork->get(req);
+    QJsonObject body;
+    body["p_my_code"] = m_myCode;
+    QNetworkReply* reply = m_friendsNetwork->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    reply->setProperty("op", "list");
 }
 
-void LauncherWindow::onRankLookupReply(QNetworkReply* reply)
+void LauncherWindow::onListFriendsReply(QNetworkReply* reply)
 {
     reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError)
+        return;
 
-    if (reply->error() == QNetworkReply::NoError)
+    const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    if (!doc.isArray())
+        return;
+
+    m_friends.clear();
+    for (const QJsonValue& v : doc.array())
     {
-        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-        if (doc.isArray())
+        const QJsonObject row = v.toObject();
+        FriendEntry entry;
+        entry.nickname = row.value("nickname").toString();
+        entry.status = row.value("status").toString();
+        entry.iAmRequester = row.value("i_am_requester").toBool();
+        m_friends.append(entry);
+    }
+
+    refreshFriendsDisplay();
+}
+
+void LauncherWindow::refreshFriendsDisplay()
+{
+    m_friendsList->clear();
+
+    for (const FriendEntry& friendEntry : m_friends)
+    {
+        auto* item = new QListWidgetItem(m_friendsList);
+        item->setData(Qt::UserRole, friendEntry.nickname);
+
+        if (friendEntry.status == QStringLiteral("accepted"))
         {
-            for (const QJsonValue& v : doc.array())
-            {
-                const QJsonObject row = v.toObject();
-                m_rankCache[row.value("nickname").toString()] = row.value("rank_points").toDouble();
-            }
+            const QString suffix = statusSuffixFor(friendEntry.nickname);
+            item->setText(friendEntry.nickname + suffix);
+            if (suffix.isEmpty())
+                item->setForeground(QColor(0x5a, 0x55, 0x48));
+            continue;
         }
-    }
 
-    for (int i = 0; i < m_presenceList->count(); ++i)
-    {
-        QListWidgetItem* item = m_presenceList->item(i);
-        const QString nick = item->data(Qt::UserRole).toString();
-        item->setText(m_rankCache.contains(nick)
-            ? QStringLiteral("%1  %2").arg(tierForPoints(m_rankCache.value(nick)), nick)
-            : nick);
+        // Pendiente.
+        if (friendEntry.iAmRequester)
+        {
+            item->setText(QStringLiteral("%1  (esperando respuesta)").arg(friendEntry.nickname));
+            item->setForeground(QColor(0x78, 0x5a, 0x28));
+            continue;
+        }
+
+        // Me llego una solicitud: fila con botones Aceptar/Rechazar.
+        auto* row = new QWidget(m_friendsList);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(8, 2, 8, 2);
+        auto* label = new QLabel(QStringLiteral("%1 quiere ser tu amigo").arg(friendEntry.nickname), row);
+        label->setStyleSheet("background: transparent; color: #f5c542;");
+        rowLayout->addWidget(label, 1);
+        auto* acceptBtn = new QPushButton(QStringLiteral("Aceptar"), row);
+        acceptBtn->setObjectName("acceptBtn");
+        auto* declineBtn = new QPushButton(QStringLiteral("Rechazar"), row);
+        rowLayout->addWidget(acceptBtn);
+        rowLayout->addWidget(declineBtn);
+
+        const QString nickname = friendEntry.nickname;
+        connect(acceptBtn, &QPushButton::clicked, this, [this, nickname]() { respondFriendRequest(nickname, true); });
+        connect(declineBtn, &QPushButton::clicked, this, [this, nickname]() { respondFriendRequest(nickname, false); });
+
+        item->setSizeHint(row->sizeHint());
+        m_friendsList->setItemWidget(item, row);
     }
+}
+
+void LauncherWindow::onAddFriendClicked()
+{
+    const QString target = m_addFriendInput->text().trimmed();
+    if (target.isEmpty() || m_myCode.isEmpty())
+        return;
+    sendFriendRequest(target);
+    m_addFriendInput->clear();
+}
+
+void LauncherWindow::sendFriendRequest(const QString& targetNickname)
+{
+    QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/rpc/send_friend_request").arg(SUPABASE_URL)));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    req.setRawHeader("apikey", SUPABASE_ANON_KEY);
+    req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
+
+    QJsonObject body;
+    body["p_my_code"] = m_myCode;
+    body["p_target_nickname"] = targetNickname;
+    QNetworkReply* reply = m_friendsNetwork->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    reply->setProperty("op", "send");
+}
+
+void LauncherWindow::onSendFriendRequestReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError)
+    {
+        const QJsonDocument err = QJsonDocument::fromJson(reply->readAll());
+        setStatus(QStringLiteral("No se pudo agregar: %1")
+            .arg(err.object().value("message").toString(QStringLiteral("error desconocido"))));
+        return;
+    }
+    setStatus(QStringLiteral("Solicitud de amistad enviada."));
+    fetchFriends();
+}
+
+void LauncherWindow::respondFriendRequest(const QString& requesterNickname, bool accept)
+{
+    QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/rpc/respond_friend_request").arg(SUPABASE_URL)));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    req.setRawHeader("apikey", SUPABASE_ANON_KEY);
+    req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
+
+    QJsonObject body;
+    body["p_my_code"] = m_myCode;
+    body["p_requester_nickname"] = requesterNickname;
+    body["p_accept"] = accept;
+    QNetworkReply* reply = m_friendsNetwork->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    reply->setProperty("op", "respond");
+}
+
+void LauncherWindow::onRespondFriendRequestReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    fetchFriends();
+}
+
+void LauncherWindow::onWebsiteButtonClicked()
+{
+    QDesktopServices::openUrl(QUrl(QString::fromUtf8(WEBSITE_URL)));
 }
 
 void LauncherWindow::onPresenceItemDoubleClicked()

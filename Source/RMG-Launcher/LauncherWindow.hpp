@@ -16,6 +16,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QList>
 
 using LobbyClient = UserInterface::Dialog::LobbyClient;
 
@@ -37,7 +38,10 @@ public:
 private slots:
     void onConnectClicked();
     void onResolveCodeReply(QNetworkReply* reply);
-    void onRankLookupReply(QNetworkReply* reply);
+    void onFullRosterReply(QNetworkReply* reply);
+    void onSendFriendRequestReply(QNetworkReply* reply);
+    void onRespondFriendRequestReply(QNetworkReply* reply);
+    void onListFriendsReply(QNetworkReply* reply);
 
     void onLobbyStateChanged(LobbyClient::ConnectionState state);
     void onLobbyHelloFailed(const QString& reason);
@@ -53,13 +57,13 @@ private slots:
     void onAcceptChallengeClicked();
     void onDeclineChallengeClicked();
     void onPresenceItemDoubleClicked();
+    void onWebsiteButtonClicked();
+    void onAddFriendClicked();
 
 private:
     void buildUi();
     void applyStylesheet();
     void resolveAndConnect(const QString& code);
-    void refreshPresenceList();
-    void fetchRanksForPresence(const QStringList& nicknames);
     void checkIncomingChallenge();
     void sendChallenge(const QString& targetNickname);
     void handOffToGame(quint64 roomId, const QString& nickname);
@@ -67,14 +71,28 @@ private:
     void showIncomingChallenge(const QString& challenger);
     void clearIncomingChallenge();
 
+    // Roster (everyone registered on the site, not just who has the
+    // launcher open) + friends.
+    void fetchFullRoster();
+    void refreshRosterDisplay();
+    QString statusSuffixFor(const QString& nickname) const;
+    void fetchFriends();
+    void refreshFriendsDisplay();
+    void sendFriendRequest(const QString& targetNickname);
+    void respondFriendRequest(const QString& requesterNickname, bool accept);
+
     // ---- UI ----
     QLineEdit*   m_codeInput = nullptr;
     QPushButton* m_connectBtn = nullptr;
+    QPushButton* m_websiteBtn = nullptr;
     QLabel*      m_statusLabel = nullptr;
     QLabel*      m_myNicknameLabel = nullptr;
     QListWidget* m_presenceList = nullptr;
     QLineEdit*   m_challengeTargetInput = nullptr;
     QPushButton* m_challengeBtn = nullptr;
+    QLineEdit*   m_addFriendInput = nullptr;
+    QPushButton* m_addFriendBtn = nullptr;
+    QListWidget* m_friendsList = nullptr;
 
     QWidget*     m_incomingBanner = nullptr;
     QLabel*      m_incomingLabel = nullptr;
@@ -83,8 +101,23 @@ private:
 
     // ---- Networking (Supabase) ----
     QNetworkAccessManager* m_network = nullptr;
-    QNetworkAccessManager* m_rankNetwork = nullptr;
-    QHash<QString, double> m_rankCache;
+    QNetworkAccessManager* m_rosterNetwork = nullptr;
+    QNetworkAccessManager* m_friendsNetwork = nullptr;
+
+    struct RosterEntry
+    {
+        QString nickname;
+        double rankPoints = 0;
+    };
+    QList<RosterEntry> m_fullRoster;
+
+    struct FriendEntry
+    {
+        QString nickname;
+        QString status;       // "pending" or "accepted"
+        bool iAmRequester = false;
+    };
+    QList<FriendEntry> m_friends;
 
     // ---- Lobby ----
     LobbyClient* m_lobbyClient = nullptr;
