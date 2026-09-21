@@ -28,8 +28,10 @@ class QLabel;
 class QListWidget;
 class QListWidgetItem;
 class QTextEdit;
+class QVBoxLayout;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QColor;
 
 class LauncherWindow : public QWidget
 {
@@ -90,10 +92,17 @@ private:
     void respondFriendRequest(const QString& requesterNickname, bool accept);
 
     // Fila con texto + Aceptar/Rechazar, usada tanto para desafios como para
-    // solicitudes de amistad. `list` es la lista donde se inserta.
-    void addActionRow(QListWidget* list, const QString& text, const QString& textColor,
+    // solicitudes de amistad. `layout` es un QVBoxLayout simple (no
+    // QListWidget::setItemWidget -- esa tecnica broke en la primera prueba
+    // en vivo con dos cuentas reales y de nuevo despues de un primer
+    // intento de arreglo; un QWidget/QVBoxLayout comun es el camino mas
+    // probado en Qt para filas con botones).
+    void addActionRow(QVBoxLayout* layout, const QString& text, const QString& textColor,
                        std::function<void()> onAccept, std::function<void()> onDecline,
                        bool pulse);
+    void addPlainRow(QVBoxLayout* layout, const QString& text, const QColor& color);
+    // Vacia `layout` (borra sus widgets hijos) antes de reconstruirlo.
+    void clearLayout(QVBoxLayout* layout);
     void appendChatLine(const QString& author, const QString& message, bool system);
 
     // ---- UI ----
@@ -104,10 +113,13 @@ private:
     QLabel*      m_myNicknameLabel = nullptr;
     QListWidget* m_presenceList = nullptr;
     QListWidget* m_friendsList = nullptr;
-    QListWidget* m_friendRequestsList = nullptr;
     bool         m_lobbyConnected = false;
 
-    QListWidget* m_pendingList = nullptr;
+    // Contenedores simples (QWidget + QVBoxLayout, filas agregadas/quitadas
+    // a mano) en vez de QListWidget::setItemWidget para estos dos -- ver el
+    // comentario de addActionRow.
+    QVBoxLayout* m_pendingLayout = nullptr;
+    QVBoxLayout* m_friendRequestsLayout = nullptr;
 
     QTextEdit*   m_chatLog = nullptr;
     QLineEdit*   m_chatInput = nullptr;

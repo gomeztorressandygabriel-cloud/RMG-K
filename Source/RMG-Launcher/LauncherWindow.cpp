@@ -30,6 +30,9 @@
 #include <QSize>
 #include <QTextEdit>
 #include <QScrollBar>
+#include <QScrollArea>
+#include <QFrame>
+#include <QLayoutItem>
 
 // Misma anon key publica que usa la web (config.js) y RMG-K (OnlineBridge.cpp)
 // -- nunca la service_role key.
@@ -217,11 +220,21 @@ void LauncherWindow::buildUi()
     pendingLabel->setObjectName("sectionLabel");
     mainLayout->addWidget(pendingLabel);
 
-    m_pendingList = new QListWidget(main);
-    m_pendingList->setObjectName("pendingList");
-    m_pendingList->setSpacing(3);
-    m_pendingList->setFixedHeight(100);
-    mainLayout->addWidget(m_pendingList);
+    {
+        auto* scroll = new QScrollArea(main);
+        scroll->setObjectName("pendingScroll");
+        scroll->setWidgetResizable(true);
+        scroll->setFixedHeight(100);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto* container = new QWidget(scroll);
+        m_pendingLayout = new QVBoxLayout(container);
+        m_pendingLayout->setContentsMargins(0, 0, 4, 0);
+        m_pendingLayout->setSpacing(4);
+        m_pendingLayout->addStretch(1);
+        scroll->setWidget(container);
+        mainLayout->addWidget(scroll);
+    }
 
     // Solicitudes de amistad recibidas -- buzon aparte de la lista general
     // de amigos, para que no se pierdan entre los ya agregados.
@@ -229,11 +242,21 @@ void LauncherWindow::buildUi()
     requestsLabel->setObjectName("sectionLabel");
     mainLayout->addWidget(requestsLabel);
 
-    m_friendRequestsList = new QListWidget(main);
-    m_friendRequestsList->setObjectName("friendRequestsList");
-    m_friendRequestsList->setSpacing(3);
-    m_friendRequestsList->setFixedHeight(90);
-    mainLayout->addWidget(m_friendRequestsList);
+    {
+        auto* scroll = new QScrollArea(main);
+        scroll->setObjectName("friendRequestsScroll");
+        scroll->setWidgetResizable(true);
+        scroll->setFixedHeight(90);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto* container = new QWidget(scroll);
+        m_friendRequestsLayout = new QVBoxLayout(container);
+        m_friendRequestsLayout->setContentsMargins(0, 0, 4, 0);
+        m_friendRequestsLayout->setSpacing(4);
+        m_friendRequestsLayout->addStretch(1);
+        scroll->setWidget(container);
+        mainLayout->addWidget(scroll);
+    }
 
     auto* friendsLabel = new QLabel(QStringLiteral("-- AMIGOS --"), main);
     friendsLabel->setObjectName("sectionLabel");
@@ -324,6 +347,13 @@ void LauncherWindow::applyStylesheet()
         #acceptBtn { border-color: #0ac8b9; }
         #acceptBtn:hover { background: #0ac8b9; color: #010a13; }
 
+        QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
+            background: transparent; border: none;
+        }
+        #actionRow {
+            background: #0b1c2c; border: 1px solid #2a2418; border-radius: 4px;
+        }
+
         #chatLog {
             background: #010a13; border: 1px solid #785a28; border-radius: 3px;
             padding: 6px; font-size: 12px;
@@ -367,14 +397,20 @@ void LauncherWindow::startPulse(QWidget* target)
     group->start();
 }
 
-void LauncherWindow::addActionRow(QListWidget* list, const QString& text, const QString& textColor,
+void LauncherWindow::addActionRow(QVBoxLayout* layout, const QString& text, const QString& textColor,
                                    std::function<void()> onAccept, std::function<void()> onDecline,
                                    bool pulse)
 {
-    auto* item = new QListWidgetItem(list);
-    auto* row = new QWidget(list);
+    // QListWidget::setItemWidget fallo dos veces seguidas en la prueba en
+    // vivo (filas vacias) por razones que no terminamos de precisar -- esto
+    // usa el camino mas simple y probado de Qt para una fila con widgets:
+    // un QWidget comun metido directo en un QVBoxLayout, sin pasar por la
+    // maquinaria de items/delegates de las vistas de lista.
+    auto* row = new QWidget();
+    row->setObjectName("actionRow");
+    row->setAttribute(Qt::WA_StyledBackground, true); // si no, "background"/"border" del QSS no se pintan en un QWidget comun
     auto* rowLayout = new QHBoxLayout(row);
-    rowLayout->setContentsMargins(12, 4, 10, 4);
+    rowLayout->setContentsMargins(12, 6, 10, 6);
     rowLayout->setSpacing(8);
 
     auto* label = new QLabel(text, row);
@@ -391,17 +427,30 @@ void LauncherWindow::addActionRow(QListWidget* list, const QString& text, const 
     connect(acceptBtn, &QPushButton::clicked, this, [onAccept]() { if (onAccept) onAccept(); });
     connect(declineBtn, &QPushButton::clicked, this, [onDecline]() { if (onDecline) onDecline(); });
 
-    // El bug real que vimos en la prueba en vivo: darle ancho 0 al sizeHint
-    // (para "que Qt lo estire solo") en realidad deja la celda del widget
-    // incrustado con 0 pixeles de ancho -- el marco del item se ve (por eso
-    // salia ese recuadro), pero adentro no cabe nada. Hay que darle el
-    // ancho real del viewport.
-    const int width = qMax(220, list->viewport()->width());
-    item->setSizeHint(QSize(width, 46));
-    list->setItemWidget(item, row);
+    // Insertar antes del stretch final (que siempre queda como ultimo item
+    // del layout) para que las filas se apilen arriba.
+    layout->insertWidget(layout->count() - 1, row);
 
     if (pulse)
         startPulse(row);
+}
+
+void LauncherWindow::addPlainRow(QVBoxLayout* layout, const QString& text, const QColor& color)
+{
+    auto* label = new QLabel(text);
+    label->setStyleSheet(QStringLiteral("background: transparent; color: %1;").arg(color.name()));
+    layout->insertWidget(layout->count() - 1, label);
+}
+
+void LauncherWindow::clearLayout(QVBoxLayout* layout)
+{
+    // Deja el stretch final (el ultimo item) y borra todo lo demas.
+    while (layout->count() > 1)
+    {
+        QLayoutItem* child = layout->takeAt(0);
+        delete child->widget();
+        delete child;
+    }
 }
 
 void LauncherWindow::onConnectClicked()
@@ -641,7 +690,7 @@ void LauncherWindow::onListFriendsReply(QNetworkReply* reply)
 void LauncherWindow::refreshFriendsDisplay()
 {
     m_friendsList->clear();
-    m_friendRequestsList->clear();
+    clearLayout(m_friendRequestsLayout);
 
     for (const FriendEntry& friendEntry : m_friends)
     {
@@ -668,7 +717,7 @@ void LauncherWindow::refreshFriendsDisplay()
 
         // Me llego una solicitud: va al buzon aparte, con Aceptar/Rechazar.
         const QString nickname = friendEntry.nickname;
-        addActionRow(m_friendRequestsList, QStringLiteral("%1 quiere ser tu amigo").arg(nickname), "#f5c542",
+        addActionRow(m_friendRequestsLayout, QStringLiteral("%1 quiere ser tu amigo").arg(nickname), "#f5c542",
                      [this, nickname]() { respondFriendRequest(nickname, true); },
                      [this, nickname]() { respondFriendRequest(nickname, false); },
                      /*pulse=*/false);
@@ -848,14 +897,14 @@ void LauncherWindow::checkIncomingChallenges()
 
 void LauncherWindow::refreshPendingChallengesDisplay()
 {
-    m_pendingList->clear();
+    clearLayout(m_pendingLayout);
 
     // Los que me llegaron van primero (necesitan mi accion), en dorado y
     // pulsando para que no pasen desapercibidos.
     for (const PendingChallenge& challenge : m_incomingChallenges)
     {
         const quint64 roomId = challenge.roomId;
-        addActionRow(m_pendingList, QStringLiteral("%1 te desafio!").arg(challenge.nickname), "#f5c542",
+        addActionRow(m_pendingLayout, QStringLiteral("%1 te desafio!").arg(challenge.nickname), "#f5c542",
                      [this, roomId]() { respondToChallenge(roomId, true); },
                      [this, roomId]() { respondToChallenge(roomId, false); },
                      /*pulse=*/true);
@@ -863,9 +912,8 @@ void LauncherWindow::refreshPendingChallengesDisplay()
 
     for (const PendingChallenge& challenge : m_outgoingChallenges)
     {
-        auto* item = new QListWidgetItem(m_pendingList);
-        item->setText(QStringLiteral("Esperando respuesta de %1...").arg(challenge.nickname));
-        item->setForeground(QColor(0x78, 0x5a, 0x28));
+        addPlainRow(m_pendingLayout, QStringLiteral("Esperando respuesta de %1...").arg(challenge.nickname),
+                    QColor(0x78, 0x5a, 0x28));
     }
 }
 
