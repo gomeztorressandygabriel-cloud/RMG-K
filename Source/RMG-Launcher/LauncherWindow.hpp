@@ -54,7 +54,6 @@ private slots:
     void onLobbyRoomJoinOk(quint64 roomId);
     void onLobbyRoomJoinFailed(const QString& reason);
 
-    void onChallengeButtonClicked();
     void onAcceptChallengeClicked();
     void onDeclineChallengeClicked();
     void onPresenceItemDoubleClicked();
@@ -66,6 +65,7 @@ private:
     void applyStylesheet();
     void resolveAndConnect(const QString& code);
     void checkIncomingChallenge();
+    void challengePlayer(const QString& targetNickname);
     void sendChallenge(const QString& targetNickname);
     void handOffToGame(quint64 roomId, const QString& nickname);
     void setStatus(const QString& text);
@@ -89,9 +89,8 @@ private:
     QLabel*      m_statusLabel = nullptr;
     QLabel*      m_myNicknameLabel = nullptr;
     QListWidget* m_presenceList = nullptr;
-    QLineEdit*   m_challengeTargetInput = nullptr;
-    QPushButton* m_challengeBtn = nullptr;
     QListWidget* m_friendsList = nullptr;
+    bool         m_lobbyConnected = false;
 
     QWidget*     m_incomingBanner = nullptr;
     QLabel*      m_incomingLabel = nullptr;

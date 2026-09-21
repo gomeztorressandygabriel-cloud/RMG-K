@@ -159,22 +159,6 @@ void LauncherWindow::buildUi()
 
     side->addStretch(1);
 
-    auto* challengeLabel = new QLabel(QStringLiteral("DESAFIAR"), sidebar);
-    challengeLabel->setObjectName("sectionLabel");
-    side->addWidget(challengeLabel);
-
-    m_challengeTargetInput = new QLineEdit(sidebar);
-    m_challengeTargetInput->setPlaceholderText(QStringLiteral("Nickname del rival"));
-    side->addWidget(m_challengeTargetInput);
-
-    m_challengeBtn = new QPushButton(QStringLiteral("Enviar desafio"), sidebar);
-    m_challengeBtn->setObjectName("primaryBtn");
-    m_challengeBtn->setEnabled(false);
-    side->addWidget(m_challengeBtn);
-
-    connect(m_challengeBtn, &QPushButton::clicked, this, &LauncherWindow::onChallengeButtonClicked);
-    connect(m_challengeTargetInput, &QLineEdit::returnPressed, this, &LauncherWindow::onChallengeButtonClicked);
-
     root->addWidget(sidebar);
 
     // ==================== Panel derecho: presencia ====================
@@ -229,7 +213,7 @@ void LauncherWindow::buildUi()
     connect(m_presenceList, &QListWidget::itemDoubleClicked, this, &LauncherWindow::onPresenceItemDoubleClicked);
     connect(m_presenceList, &QListWidget::customContextMenuRequested, this, &LauncherWindow::onPresenceContextMenuRequested);
 
-    auto* hint = new QLabel(QStringLiteral("Doble click para desafiar - click derecho para agregar de amigo"), main);
+    auto* hint = new QLabel(QStringLiteral("Doble click o click derecho para desafiar - click derecho para agregar de amigo"), main);
     hint->setObjectName("hintLabel");
     mainLayout->addWidget(hint);
 
@@ -380,20 +364,20 @@ void LauncherWindow::onLobbyStateChanged(LobbyClient::ConnectionState state)
     {
     case State::Connected:
         setStatus(QStringLiteral("Conectado como %1").arg(m_myNickname));
-        m_challengeBtn->setEnabled(true);
+        m_lobbyConnected = true;
         break;
     case State::Connecting:
     case State::Authenticating:
         setStatus(QStringLiteral("Conectando al Lobby..."));
-        m_challengeBtn->setEnabled(false);
+        m_lobbyConnected = false;
         break;
     case State::Disconnected:
-        m_challengeBtn->setEnabled(false);
+        m_lobbyConnected = false;
         m_presenceList->clear();
         break;
     case State::Failed:
         setStatus(QStringLiteral("No se pudo conectar al Lobby."));
-        m_challengeBtn->setEnabled(false);
+        m_lobbyConnected = false;
         break;
     }
 }
@@ -649,7 +633,7 @@ void LauncherWindow::onPresenceItemDoubleClicked()
     QListWidgetItem* item = m_presenceList->currentItem();
     if (item == nullptr)
         return;
-    m_challengeTargetInput->setText(item->data(Qt::UserRole).toString());
+    challengePlayer(item->data(Qt::UserRole).toString());
 }
 
 void LauncherWindow::onPresenceContextMenuRequested(const QPoint& pos)
@@ -660,25 +644,24 @@ void LauncherWindow::onPresenceContextMenuRequested(const QPoint& pos)
 
     const QString nickname = item->data(Qt::UserRole).toString();
     QMenu menu(m_presenceList);
+    QAction* challengeAction = menu.addAction(QStringLiteral("Desafiar a %1").arg(nickname));
     QAction* addFriendAction = menu.addAction(QStringLiteral("Agregar a %1 de amigo").arg(nickname));
     QAction* chosen = menu.exec(m_presenceList->mapToGlobal(pos));
-    if (chosen == addFriendAction)
+    if (chosen == challengeAction)
+        challengePlayer(nickname);
+    else if (chosen == addFriendAction)
         sendFriendRequest(nickname);
 }
 
-void LauncherWindow::onChallengeButtonClicked()
+void LauncherWindow::challengePlayer(const QString& targetNickname)
 {
-    const QString target = m_challengeTargetInput->text().trimmed();
-    if (target.isEmpty() || m_lobbyClient == nullptr)
+    if (targetNickname.isEmpty() || m_lobbyClient == nullptr || !m_lobbyConnected)
         return;
-    if (m_lobbyClient->state() != LobbyClient::ConnectionState::Connected)
-        return;
-    sendChallenge(target);
+    sendChallenge(targetNickname);
 }
 
 void LauncherWindow::sendChallenge(const QString& targetNickname)
 {
-    m_challengeBtn->setEnabled(false);
     m_pendingChallengeTarget = targetNickname;
     setStatus(QStringLiteral("Enviando desafio a %1...").arg(targetNickname));
 
@@ -706,7 +689,6 @@ void LauncherWindow::onLobbyRoomCreated(quint64 roomId)
 
 void LauncherWindow::onLobbyRoomCreateFailed(const QString& reason)
 {
-    m_challengeBtn->setEnabled(true);
     setStatus(QStringLiteral("No se pudo enviar el desafio: %1").arg(reason));
 }
 
