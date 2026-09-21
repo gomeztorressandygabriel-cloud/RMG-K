@@ -28,6 +28,8 @@
 #include <QEasingCurve>
 #include <QAbstractAnimation>
 #include <QSize>
+#include <QTextEdit>
+#include <QScrollBar>
 
 // Misma anon key publica que usa la web (config.js) y RMG-K (OnlineBridge.cpp)
 // -- nunca la service_role key.
@@ -65,7 +67,7 @@ static QString tierForPoints(double points)
 LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
 {
     setWindowTitle(QStringLiteral("Smash Remix Launcher"));
-    resize(880, 520);
+    resize(980, 700);
 
     buildUi();
     applyStylesheet();
@@ -112,6 +114,7 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
     connect(m_lobbyClient, &LobbyClient::roomCreateFailed, this, &LauncherWindow::onLobbyRoomCreateFailed);
     connect(m_lobbyClient, &LobbyClient::roomJoinOk, this, &LauncherWindow::onLobbyRoomJoinOk);
     connect(m_lobbyClient, &LobbyClient::roomJoinFailed, this, &LauncherWindow::onLobbyRoomJoinFailed);
+    connect(m_lobbyClient, &LobbyClient::chatMessageReceived, this, &LauncherWindow::onLobbyChatMessageReceived);
 
     fetchFullRoster();
 
@@ -175,7 +178,29 @@ void LauncherWindow::buildUi()
     m_statusLabel->setWordWrap(true);
     side->addWidget(m_statusLabel);
 
-    side->addStretch(1);
+    side->addSpacing(12);
+
+    auto* chatLabel = new QLabel(QStringLiteral("CHAT"), sidebar);
+    chatLabel->setObjectName("sectionLabel");
+    side->addWidget(chatLabel);
+
+    m_chatLog = new QTextEdit(sidebar);
+    m_chatLog->setObjectName("chatLog");
+    m_chatLog->setReadOnly(true);
+    side->addWidget(m_chatLog, 1);
+
+    auto* chatRow = new QHBoxLayout();
+    m_chatInput = new QLineEdit(sidebar);
+    m_chatInput->setPlaceholderText(QStringLiteral("Mensaje..."));
+    m_chatInput->setEnabled(false);
+    m_chatSendBtn = new QPushButton(QStringLiteral("Enviar"), sidebar);
+    m_chatSendBtn->setEnabled(false);
+    chatRow->addWidget(m_chatInput, 1);
+    chatRow->addWidget(m_chatSendBtn);
+    side->addLayout(chatRow);
+
+    connect(m_chatSendBtn, &QPushButton::clicked, this, &LauncherWindow::onChatSendClicked);
+    connect(m_chatInput, &QLineEdit::returnPressed, this, &LauncherWindow::onChatSendClicked);
 
     root->addWidget(sidebar);
 
@@ -195,8 +220,20 @@ void LauncherWindow::buildUi()
     m_pendingList = new QListWidget(main);
     m_pendingList->setObjectName("pendingList");
     m_pendingList->setSpacing(3);
-    m_pendingList->setFixedHeight(110);
+    m_pendingList->setFixedHeight(100);
     mainLayout->addWidget(m_pendingList);
+
+    // Solicitudes de amistad recibidas -- buzon aparte de la lista general
+    // de amigos, para que no se pierdan entre los ya agregados.
+    auto* requestsLabel = new QLabel(QStringLiteral("-- SOLICITUDES DE AMISTAD --"), main);
+    requestsLabel->setObjectName("sectionLabel");
+    mainLayout->addWidget(requestsLabel);
+
+    m_friendRequestsList = new QListWidget(main);
+    m_friendRequestsList->setObjectName("friendRequestsList");
+    m_friendRequestsList->setSpacing(3);
+    m_friendRequestsList->setFixedHeight(90);
+    mainLayout->addWidget(m_friendRequestsList);
 
     auto* friendsLabel = new QLabel(QStringLiteral("-- AMIGOS --"), main);
     friendsLabel->setObjectName("sectionLabel");
@@ -205,7 +242,7 @@ void LauncherWindow::buildUi()
     m_friendsList = new QListWidget(main);
     m_friendsList->setObjectName("friendsList");
     m_friendsList->setSpacing(3);
-    m_friendsList->setFixedHeight(150);
+    m_friendsList->setFixedHeight(110);
     mainLayout->addWidget(m_friendsList);
 
     auto* onlineHeader = new QHBoxLayout();
@@ -287,6 +324,11 @@ void LauncherWindow::applyStylesheet()
         #acceptBtn { border-color: #0ac8b9; }
         #acceptBtn:hover { background: #0ac8b9; color: #010a13; }
 
+        #chatLog {
+            background: #010a13; border: 1px solid #785a28; border-radius: 3px;
+            padding: 6px; font-size: 12px;
+        }
+
         QScrollBar:vertical { background: transparent; width: 8px; }
         QScrollBar::handle:vertical { background: #785a28; border-radius: 4px; min-height: 24px; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
@@ -323,6 +365,43 @@ void LauncherWindow::startPulse(QWidget* target)
     group->addAnimation(down);
     group->setLoopCount(-1);
     group->start();
+}
+
+void LauncherWindow::addActionRow(QListWidget* list, const QString& text, const QString& textColor,
+                                   std::function<void()> onAccept, std::function<void()> onDecline,
+                                   bool pulse)
+{
+    auto* item = new QListWidgetItem(list);
+    auto* row = new QWidget(list);
+    auto* rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(12, 4, 10, 4);
+    rowLayout->setSpacing(8);
+
+    auto* label = new QLabel(text, row);
+    label->setStyleSheet(QStringLiteral("background: transparent; color: %1; font-weight: 700;").arg(textColor));
+    label->setWordWrap(true);
+    rowLayout->addWidget(label, 1);
+
+    auto* acceptBtn = new QPushButton(QStringLiteral("Aceptar"), row);
+    acceptBtn->setObjectName("acceptBtn");
+    auto* declineBtn = new QPushButton(QStringLiteral("Rechazar"), row);
+    rowLayout->addWidget(acceptBtn);
+    rowLayout->addWidget(declineBtn);
+
+    connect(acceptBtn, &QPushButton::clicked, this, [onAccept]() { if (onAccept) onAccept(); });
+    connect(declineBtn, &QPushButton::clicked, this, [onDecline]() { if (onDecline) onDecline(); });
+
+    // El bug real que vimos en la prueba en vivo: darle ancho 0 al sizeHint
+    // (para "que Qt lo estire solo") en realidad deja la celda del widget
+    // incrustado con 0 pixeles de ancho -- el marco del item se ve (por eso
+    // salia ese recuadro), pero adentro no cabe nada. Hay que darle el
+    // ancho real del viewport.
+    const int width = qMax(220, list->viewport()->width());
+    item->setSizeHint(QSize(width, 46));
+    list->setItemWidget(item, row);
+
+    if (pulse)
+        startPulse(row);
 }
 
 void LauncherWindow::onConnectClicked()
@@ -411,6 +490,8 @@ void LauncherWindow::onLobbyStateChanged(LobbyClient::ConnectionState state)
         m_lobbyConnected = false;
         break;
     }
+    m_chatInput->setEnabled(m_lobbyConnected);
+    m_chatSendBtn->setEnabled(m_lobbyConnected);
 }
 
 void LauncherWindow::onLobbyHelloFailed(const QString& reason)
@@ -560,14 +641,14 @@ void LauncherWindow::onListFriendsReply(QNetworkReply* reply)
 void LauncherWindow::refreshFriendsDisplay()
 {
     m_friendsList->clear();
+    m_friendRequestsList->clear();
 
     for (const FriendEntry& friendEntry : m_friends)
     {
-        auto* item = new QListWidgetItem(m_friendsList);
-        item->setData(Qt::UserRole, friendEntry.nickname);
-
         if (friendEntry.status == QStringLiteral("accepted"))
         {
+            auto* item = new QListWidgetItem(m_friendsList);
+            item->setData(Qt::UserRole, friendEntry.nickname);
             const QString suffix = statusSuffixFor(friendEntry.nickname);
             item->setText(friendEntry.nickname + suffix);
             if (suffix.isEmpty())
@@ -575,38 +656,22 @@ void LauncherWindow::refreshFriendsDisplay()
             continue;
         }
 
-        // Pendiente.
         if (friendEntry.iAmRequester)
         {
+            // Yo mande la solicitud, todavia esperando que respondan.
+            auto* item = new QListWidgetItem(m_friendsList);
+            item->setData(Qt::UserRole, friendEntry.nickname);
             item->setText(QStringLiteral("%1  (esperando respuesta)").arg(friendEntry.nickname));
             item->setForeground(QColor(0x78, 0x5a, 0x28));
             continue;
         }
 
-        // Me llego una solicitud: fila con botones Aceptar/Rechazar.
-        auto* row = new QWidget(m_friendsList);
-        auto* rowLayout = new QHBoxLayout(row);
-        rowLayout->setContentsMargins(8, 2, 8, 2);
-        auto* label = new QLabel(QStringLiteral("%1 quiere ser tu amigo").arg(friendEntry.nickname), row);
-        label->setStyleSheet("background: transparent; color: #f5c542;");
-        rowLayout->addWidget(label, 1);
-        auto* acceptBtn = new QPushButton(QStringLiteral("Aceptar"), row);
-        acceptBtn->setObjectName("acceptBtn");
-        auto* declineBtn = new QPushButton(QStringLiteral("Rechazar"), row);
-        rowLayout->addWidget(acceptBtn);
-        rowLayout->addWidget(declineBtn);
-
+        // Me llego una solicitud: va al buzon aparte, con Aceptar/Rechazar.
         const QString nickname = friendEntry.nickname;
-        connect(acceptBtn, &QPushButton::clicked, this, [this, nickname]() { respondFriendRequest(nickname, true); });
-        connect(declineBtn, &QPushButton::clicked, this, [this, nickname]() { respondFriendRequest(nickname, false); });
-
-        // row->sizeHint() no sirve aca: el widget todavia no paso por un
-        // ciclo de layout real (recien se creo, nunca se mostro), asi que
-        // Qt no tiene como saber cuanto espacio necesitan el texto y los
-        // botones -- devuelve un tamano chico/vacio y la fila se ve en
-        // blanco. Un alto fijo evita depender de esa medicion temprana.
-        item->setSizeHint(QSize(0, 44));
-        m_friendsList->setItemWidget(item, row);
+        addActionRow(m_friendRequestsList, QStringLiteral("%1 quiere ser tu amigo").arg(nickname), "#f5c542",
+                     [this, nickname]() { respondFriendRequest(nickname, true); },
+                     [this, nickname]() { respondFriendRequest(nickname, false); },
+                     /*pulse=*/false);
     }
 }
 
@@ -789,29 +854,11 @@ void LauncherWindow::refreshPendingChallengesDisplay()
     // pulsando para que no pasen desapercibidos.
     for (const PendingChallenge& challenge : m_incomingChallenges)
     {
-        auto* item = new QListWidgetItem(m_pendingList);
-        auto* row = new QWidget(m_pendingList);
-        auto* rowLayout = new QHBoxLayout(row);
-        rowLayout->setContentsMargins(8, 2, 8, 2);
-        auto* label = new QLabel(QStringLiteral("%1 te desafio!").arg(challenge.nickname), row);
-        label->setStyleSheet("background: transparent; color: #f5c542; font-weight: 700;");
-        rowLayout->addWidget(label, 1);
-        auto* acceptBtn = new QPushButton(QStringLiteral("Aceptar"), row);
-        acceptBtn->setObjectName("acceptBtn");
-        auto* declineBtn = new QPushButton(QStringLiteral("Rechazar"), row);
-        rowLayout->addWidget(acceptBtn);
-        rowLayout->addWidget(declineBtn);
-
         const quint64 roomId = challenge.roomId;
-        connect(acceptBtn, &QPushButton::clicked, this, [this, roomId]() { respondToChallenge(roomId, true); });
-        connect(declineBtn, &QPushButton::clicked, this, [this, roomId]() { respondToChallenge(roomId, false); });
-
-        // Alto fijo en vez de row->sizeHint(): recien creado, sin haber
-        // pasado por un ciclo de layout, ese sizeHint da un tamano chico o
-        // vacio y la fila se ve en blanco (bug real visto en la prueba).
-        item->setSizeHint(QSize(0, 44));
-        m_pendingList->setItemWidget(item, row);
-        startPulse(row);
+        addActionRow(m_pendingList, QStringLiteral("%1 te desafio!").arg(challenge.nickname), "#f5c542",
+                     [this, roomId]() { respondToChallenge(roomId, true); },
+                     [this, roomId]() { respondToChallenge(roomId, false); },
+                     /*pulse=*/true);
     }
 
     for (const PendingChallenge& challenge : m_outgoingChallenges)
@@ -868,4 +915,36 @@ void LauncherWindow::handOffToGame(quint64 roomId, const QString& nickname)
         m_lobbyClient->disconnectFromServer();
     }
     setStatus(QStringLiteral("Partida en curso. Podes dejar esta ventana abierta o cerrarla."));
+}
+
+void LauncherWindow::onChatSendClicked()
+{
+    const QString text = m_chatInput->text().trimmed();
+    if (text.isEmpty() || m_lobbyClient == nullptr || !m_lobbyConnected)
+        return;
+    m_lobbyClient->sendChat(QStringLiteral("lobby"), text);
+    m_chatInput->clear();
+}
+
+void LauncherWindow::onLobbyChatMessageReceived(const LobbyClient::ChatMessage& msg)
+{
+    if (msg.channel != QStringLiteral("lobby"))
+        return;
+    appendChatLine(msg.fromUsername, msg.message, false);
+}
+
+void LauncherWindow::appendChatLine(const QString& author, const QString& message, bool system)
+{
+    if (system)
+    {
+        m_chatLog->append(QStringLiteral("<span style='color:#5a5548;'>%1</span>")
+            .arg(message.toHtmlEscaped()));
+    }
+    else
+    {
+        m_chatLog->append(QStringLiteral("<b style='color:#0ac8b9;'>%1:</b> %2")
+            .arg(author.toHtmlEscaped(), message.toHtmlEscaped()));
+    }
+    if (QScrollBar* bar = m_chatLog->verticalScrollBar())
+        bar->setValue(bar->maximum());
 }

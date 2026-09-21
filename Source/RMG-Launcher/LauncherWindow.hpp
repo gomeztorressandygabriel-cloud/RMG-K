@@ -18,6 +18,7 @@
 #include <QHash>
 #include <QList>
 #include <QPoint>
+#include <functional>
 
 using LobbyClient = UserInterface::Dialog::LobbyClient;
 
@@ -25,6 +26,8 @@ class QLineEdit;
 class QPushButton;
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
+class QTextEdit;
 class QNetworkAccessManager;
 class QNetworkReply;
 
@@ -57,6 +60,8 @@ private slots:
     void onPresenceItemDoubleClicked();
     void onPresenceContextMenuRequested(const QPoint& pos);
     void onWebsiteButtonClicked();
+    void onChatSendClicked();
+    void onLobbyChatMessageReceived(const LobbyClient::ChatMessage& msg);
 
 private:
     void buildUi();
@@ -84,6 +89,13 @@ private:
     void sendFriendRequest(const QString& targetNickname);
     void respondFriendRequest(const QString& requesterNickname, bool accept);
 
+    // Fila con texto + Aceptar/Rechazar, usada tanto para desafios como para
+    // solicitudes de amistad. `list` es la lista donde se inserta.
+    void addActionRow(QListWidget* list, const QString& text, const QString& textColor,
+                       std::function<void()> onAccept, std::function<void()> onDecline,
+                       bool pulse);
+    void appendChatLine(const QString& author, const QString& message, bool system);
+
     // ---- UI ----
     QLineEdit*   m_codeInput = nullptr;
     QPushButton* m_connectBtn = nullptr;
@@ -92,9 +104,14 @@ private:
     QLabel*      m_myNicknameLabel = nullptr;
     QListWidget* m_presenceList = nullptr;
     QListWidget* m_friendsList = nullptr;
+    QListWidget* m_friendRequestsList = nullptr;
     bool         m_lobbyConnected = false;
 
     QListWidget* m_pendingList = nullptr;
+
+    QTextEdit*   m_chatLog = nullptr;
+    QLineEdit*   m_chatInput = nullptr;
+    QPushButton* m_chatSendBtn = nullptr;
 
     // ---- Networking (Supabase) ----
     QNetworkAccessManager* m_network = nullptr;
