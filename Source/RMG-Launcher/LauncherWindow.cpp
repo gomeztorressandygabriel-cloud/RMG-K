@@ -81,25 +81,6 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
     windowFade->setEasingCurve(QEasingCurve::OutCubic);
     windowFade->start(QAbstractAnimation::DeleteWhenStopped);
 
-    // Pulso suave del aviso de desafio, para que resalte sin ser un parpadeo
-    // brusco -- mismo espiritu que el punto "en vivo" de la web.
-    auto* bannerEffect = new QGraphicsOpacityEffect(m_incomingBanner);
-    m_incomingBanner->setGraphicsEffect(bannerEffect);
-    auto* pulseUp = new QPropertyAnimation(bannerEffect, "opacity");
-    pulseUp->setStartValue(0.6);
-    pulseUp->setEndValue(1.0);
-    pulseUp->setDuration(700);
-    pulseUp->setEasingCurve(QEasingCurve::InOutSine);
-    auto* pulseDown = new QPropertyAnimation(bannerEffect, "opacity");
-    pulseDown->setStartValue(1.0);
-    pulseDown->setEndValue(0.6);
-    pulseDown->setDuration(700);
-    pulseDown->setEasingCurve(QEasingCurve::InOutSine);
-    m_bannerPulse = new QSequentialAnimationGroup(this);
-    m_bannerPulse->addAnimation(pulseUp);
-    m_bannerPulse->addAnimation(pulseDown);
-    m_bannerPulse->setLoopCount(-1);
-
     m_network = new QNetworkAccessManager(this);
     connect(m_network, &QNetworkAccessManager::finished, this, &LauncherWindow::onResolveCodeReply);
 
@@ -204,26 +185,17 @@ void LauncherWindow::buildUi()
     mainLayout->setContentsMargins(28, 32, 28, 28);
     mainLayout->setSpacing(14);
 
-    // Aviso de desafio entrante: banner ancho arriba de la lista, para que
-    // resalte de inmediato sin importar cuantos jugadores haya online.
-    m_incomingBanner = new QWidget(main);
-    m_incomingBanner->setObjectName("incomingBanner");
-    auto* bannerLayout = new QHBoxLayout(m_incomingBanner);
-    bannerLayout->setContentsMargins(16, 12, 16, 12);
-    m_incomingLabel = new QLabel(m_incomingBanner);
-    m_incomingLabel->setObjectName("incomingLabel");
-    m_incomingLabel->setWordWrap(true);
-    bannerLayout->addWidget(m_incomingLabel, 1);
-    m_acceptBtn = new QPushButton(QStringLiteral("Aceptar"), m_incomingBanner);
-    m_acceptBtn->setObjectName("acceptBtn");
-    m_declineBtn = new QPushButton(QStringLiteral("Rechazar"), m_incomingBanner);
-    bannerLayout->addWidget(m_acceptBtn);
-    bannerLayout->addWidget(m_declineBtn);
-    m_incomingBanner->setVisible(false);
-    mainLayout->addWidget(m_incomingBanner);
+    // Desafios pendientes (enviados y recibidos) -- primero, porque son lo
+    // mas urgente. Vacio no ocupa nada mas que la etiqueta.
+    auto* pendingLabel = new QLabel(QStringLiteral("-- DESAFIOS PENDIENTES --"), main);
+    pendingLabel->setObjectName("sectionLabel");
+    mainLayout->addWidget(pendingLabel);
 
-    connect(m_acceptBtn, &QPushButton::clicked, this, &LauncherWindow::onAcceptChallengeClicked);
-    connect(m_declineBtn, &QPushButton::clicked, this, &LauncherWindow::onDeclineChallengeClicked);
+    m_pendingList = new QListWidget(main);
+    m_pendingList->setObjectName("pendingList");
+    m_pendingList->setSpacing(3);
+    m_pendingList->setFixedHeight(110);
+    mainLayout->addWidget(m_pendingList);
 
     auto* friendsLabel = new QLabel(QStringLiteral("-- AMIGOS --"), main);
     friendsLabel->setObjectName("sectionLabel");
@@ -311,11 +283,6 @@ void LauncherWindow::applyStylesheet()
         QListWidget::item:hover { border-color: #0ac8b9; background: #0d2230; }
         QListWidget::item:selected { border-color: #c8aa6e; background: #14283a; }
 
-        #incomingBanner {
-            background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2b2007, stop:1 #1a1404);
-            border: 1px solid #f5c542; border-radius: 4px;
-        }
-        #incomingLabel { color: #f5c542; font-weight: 700; font-size: 14px; background: transparent; }
         #acceptBtn { border-color: #0ac8b9; }
         #acceptBtn:hover { background: #0ac8b9; color: #010a13; }
 
@@ -328,6 +295,33 @@ void LauncherWindow::applyStylesheet()
 void LauncherWindow::setStatus(const QString& text)
 {
     m_statusLabel->setText(text);
+}
+
+void LauncherWindow::startPulse(QWidget* target)
+{
+    // Parented a `target`: Qt lo destruye solo cuando se destruye la fila
+    // (p.ej. al reconstruir la lista con clear()), sin que haga falta
+    // rastrear ni detener nada a mano.
+    auto* effect = new QGraphicsOpacityEffect(target);
+    target->setGraphicsEffect(effect);
+
+    auto* up = new QPropertyAnimation(effect, "opacity");
+    up->setStartValue(0.6);
+    up->setEndValue(1.0);
+    up->setDuration(700);
+    up->setEasingCurve(QEasingCurve::InOutSine);
+
+    auto* down = new QPropertyAnimation(effect, "opacity");
+    down->setStartValue(1.0);
+    down->setEndValue(0.6);
+    down->setDuration(700);
+    down->setEasingCurve(QEasingCurve::InOutSine);
+
+    auto* group = new QSequentialAnimationGroup(target);
+    group->addAnimation(up);
+    group->addAnimation(down);
+    group->setLoopCount(-1);
+    group->start();
 }
 
 void LauncherWindow::onConnectClicked()
@@ -718,9 +712,9 @@ void LauncherWindow::onLobbyRoomCreated(quint64 roomId)
     // desaparecer antes de que el rival la vea en su lista (bug real que ya
     // encontramos probando esto mismo dentro del juego). Nos quedamos
     // conectados sosteniendola abierta hasta que el rival entre.
-    m_hostedChallengeRoomId = roomId;
-    m_hostedChallengeOpponent = m_pendingChallengeTarget;
-    setStatus(QStringLiteral("Desafio enviado a %1, esperando...").arg(m_hostedChallengeOpponent));
+    m_outgoingChallenges.append({roomId, m_pendingChallengeTarget});
+    setStatus(QStringLiteral("Desafio enviado a %1, esperando...").arg(m_pendingChallengeTarget));
+    refreshPendingChallengesDisplay();
 }
 
 void LauncherWindow::onLobbyRoomCreateFailed(const QString& reason)
@@ -730,110 +724,122 @@ void LauncherWindow::onLobbyRoomCreateFailed(const QString& reason)
 
 void LauncherWindow::onLobbyRoomListChanged()
 {
-    checkIncomingChallenge();
+    checkIncomingChallenges();
 
-    if (m_hostedChallengeRoomId != 0)
+    for (int i = 0; i < m_outgoingChallenges.size(); ++i)
     {
-        const auto it = m_lobbyClient->rooms().constFind(m_hostedChallengeRoomId);
+        const PendingChallenge pending = m_outgoingChallenges.at(i);
+        const auto it = m_lobbyClient->rooms().constFind(pending.roomId);
         if (it != m_lobbyClient->rooms().constEnd() && it->players >= 2)
         {
-            const quint64 roomId = m_hostedChallengeRoomId;
-            const QString opponent = m_hostedChallengeOpponent;
-            m_hostedChallengeRoomId = 0;
-            m_hostedChallengeOpponent.clear();
-            setStatus(QStringLiteral("%1 acepto! Abriendo la partida...").arg(opponent));
-            handOffToGame(roomId, m_myNickname);
+            m_outgoingChallenges.removeAt(i);
+            refreshPendingChallengesDisplay();
+            setStatus(QStringLiteral("%1 acepto! Abriendo la partida...").arg(pending.nickname));
+            handOffToGame(pending.roomId, m_myNickname);
+            return; // handOffToGame se desconecta; no queda nada mas por revisar
         }
     }
 }
 
-void LauncherWindow::checkIncomingChallenge()
+void LauncherWindow::checkIncomingChallenges()
 {
     if (m_lobbyClient == nullptr || m_myNickname.isEmpty())
         return;
 
     const QString myRoomName = QString(CHALLENGE_ROOM_PREFIX) + m_myNickname;
-    quint64 foundRoomId = 0;
-    QString foundHost;
-
+    QList<PendingChallenge> found;
     for (auto it = m_lobbyClient->rooms().constBegin(); it != m_lobbyClient->rooms().constEnd(); ++it)
     {
         if (it->name == myRoomName && it->state == QStringLiteral("waiting"))
+            found.append({it->id, it->hostName});
+    }
+
+    bool changed = found.size() != m_incomingChallenges.size();
+    if (!changed)
+    {
+        for (const PendingChallenge& f : found)
         {
-            foundRoomId = it->id;
-            foundHost = it->hostName;
-            break;
+            bool stillThere = false;
+            for (const PendingChallenge& existing : m_incomingChallenges)
+            {
+                if (existing.roomId == f.roomId) { stillThere = true; break; }
+            }
+            if (!stillThere) { changed = true; break; }
         }
     }
 
-    if (foundRoomId != 0 && foundRoomId != m_incomingChallengeRoomId)
+    if (changed)
     {
-        m_incomingChallengeRoomId = foundRoomId;
-        m_incomingChallengerName = foundHost;
-        showIncomingChallenge(foundHost);
-    }
-    else if (foundRoomId == 0 && m_incomingChallengeRoomId != 0)
-    {
-        // La sala ya no esta (el que reto se fue, o cerro el launcher).
-        m_incomingChallengeRoomId = 0;
-        m_incomingChallengerName.clear();
-        clearIncomingChallenge();
+        m_incomingChallenges = found;
+        refreshPendingChallengesDisplay();
     }
 }
 
-void LauncherWindow::showIncomingChallenge(const QString& challenger)
+void LauncherWindow::refreshPendingChallengesDisplay()
 {
-    m_incomingLabel->setText(QStringLiteral("%1 te desafio!").arg(challenger));
-    m_incomingBanner->setVisible(true);
-    m_acceptBtn->setEnabled(true);
-    m_declineBtn->setEnabled(true);
-    if (m_bannerPulse->state() != QAbstractAnimation::Running)
-        m_bannerPulse->start();
+    m_pendingList->clear();
+
+    // Los que me llegaron van primero (necesitan mi accion), en dorado y
+    // pulsando para que no pasen desapercibidos.
+    for (const PendingChallenge& challenge : m_incomingChallenges)
+    {
+        auto* item = new QListWidgetItem(m_pendingList);
+        auto* row = new QWidget(m_pendingList);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(8, 2, 8, 2);
+        auto* label = new QLabel(QStringLiteral("%1 te desafio!").arg(challenge.nickname), row);
+        label->setStyleSheet("background: transparent; color: #f5c542; font-weight: 700;");
+        rowLayout->addWidget(label, 1);
+        auto* acceptBtn = new QPushButton(QStringLiteral("Aceptar"), row);
+        acceptBtn->setObjectName("acceptBtn");
+        auto* declineBtn = new QPushButton(QStringLiteral("Rechazar"), row);
+        rowLayout->addWidget(acceptBtn);
+        rowLayout->addWidget(declineBtn);
+
+        const quint64 roomId = challenge.roomId;
+        connect(acceptBtn, &QPushButton::clicked, this, [this, roomId]() { respondToChallenge(roomId, true); });
+        connect(declineBtn, &QPushButton::clicked, this, [this, roomId]() { respondToChallenge(roomId, false); });
+
+        item->setSizeHint(row->sizeHint());
+        m_pendingList->setItemWidget(item, row);
+        startPulse(row);
+    }
+
+    for (const PendingChallenge& challenge : m_outgoingChallenges)
+    {
+        auto* item = new QListWidgetItem(m_pendingList);
+        item->setText(QStringLiteral("Esperando respuesta de %1...").arg(challenge.nickname));
+        item->setForeground(QColor(0x78, 0x5a, 0x28));
+    }
 }
 
-void LauncherWindow::clearIncomingChallenge()
+void LauncherWindow::respondToChallenge(quint64 roomId, bool accept)
 {
-    m_bannerPulse->stop();
-    if (auto* effect = qobject_cast<QGraphicsOpacityEffect*>(m_incomingBanner->graphicsEffect()))
-        effect->setOpacity(1.0);
-    m_incomingBanner->setVisible(false);
-}
+    for (int i = 0; i < m_incomingChallenges.size(); ++i)
+    {
+        if (m_incomingChallenges.at(i).roomId == roomId)
+        {
+            m_incomingChallenges.removeAt(i);
+            break;
+        }
+    }
+    refreshPendingChallengesDisplay();
 
-void LauncherWindow::onAcceptChallengeClicked()
-{
-    if (m_incomingChallengeRoomId == 0)
+    if (!accept)
         return;
-    m_acceptBtn->setEnabled(false);
-    m_declineBtn->setEnabled(false);
-    setStatus(QStringLiteral("Uniendose a la partida..."));
-    m_lobbyClient->joinRoom(m_incomingChallengeRoomId);
-}
 
-void LauncherWindow::onDeclineChallengeClicked()
-{
-    m_incomingChallengeRoomId = 0;
-    m_incomingChallengerName.clear();
-    clearIncomingChallenge();
+    setStatus(QStringLiteral("Uniendose a la partida..."));
+    m_lobbyClient->joinRoom(roomId);
 }
 
 void LauncherWindow::onLobbyRoomJoinOk(quint64 roomId)
 {
-    if (roomId != m_incomingChallengeRoomId && roomId != m_hostedChallengeRoomId)
-        return;
-
-    const QString opponent = m_incomingChallengerName;
-    m_incomingChallengeRoomId = 0;
-    m_incomingChallengerName.clear();
-    clearIncomingChallenge();
     setStatus(QStringLiteral("Conectado! Abriendo la partida..."));
     handOffToGame(roomId, m_myNickname);
-    Q_UNUSED(opponent);
 }
 
 void LauncherWindow::onLobbyRoomJoinFailed(const QString& reason)
 {
-    m_acceptBtn->setEnabled(true);
-    m_declineBtn->setEnabled(true);
     setStatus(QStringLiteral("No se pudo unir a la partida: %1").arg(reason));
 }
 

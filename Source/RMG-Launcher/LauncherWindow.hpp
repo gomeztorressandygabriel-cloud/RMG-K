@@ -27,8 +27,6 @@ class QLabel;
 class QListWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
-class QGraphicsOpacityEffect;
-class QSequentialAnimationGroup;
 
 class LauncherWindow : public QWidget
 {
@@ -56,8 +54,6 @@ private slots:
     void onLobbyRoomJoinOk(quint64 roomId);
     void onLobbyRoomJoinFailed(const QString& reason);
 
-    void onAcceptChallengeClicked();
-    void onDeclineChallengeClicked();
     void onPresenceItemDoubleClicked();
     void onPresenceContextMenuRequested(const QPoint& pos);
     void onWebsiteButtonClicked();
@@ -66,13 +62,17 @@ private:
     void buildUi();
     void applyStylesheet();
     void resolveAndConnect(const QString& code);
-    void checkIncomingChallenge();
+    void checkIncomingChallenges();
     void challengePlayer(const QString& targetNickname);
     void sendChallenge(const QString& targetNickname);
+    void respondToChallenge(quint64 roomId, bool accept);
+    void refreshPendingChallengesDisplay();
     void handOffToGame(quint64 roomId, const QString& nickname);
     void setStatus(const QString& text);
-    void showIncomingChallenge(const QString& challenger);
-    void clearIncomingChallenge();
+    // Pulso de opacidad en loop, parented a `target` (se limpia solo cuando
+    // el widget se destruye, p.ej. al reconstruir la lista). Se usa para
+    // resaltar cualquier fila que necesite tu atencion ahora mismo.
+    void startPulse(QWidget* target);
 
     // Roster (everyone registered on the site, not just who has the
     // launcher open) + friends.
@@ -94,13 +94,7 @@ private:
     QListWidget* m_friendsList = nullptr;
     bool         m_lobbyConnected = false;
 
-    QWidget*     m_incomingBanner = nullptr;
-    QLabel*      m_incomingLabel = nullptr;
-    QPushButton* m_acceptBtn = nullptr;
-    QPushButton* m_declineBtn = nullptr;
-    // Pulso de atencion en el aviso de desafio, y fundido de entrada de la
-    // ventana -- animaciones livianas (solo opacidad, sin GPU/paint extra).
-    QSequentialAnimationGroup* m_bannerPulse = nullptr;
+    QListWidget* m_pendingList = nullptr;
 
     // ---- Networking (Supabase) ----
     QNetworkAccessManager* m_network = nullptr;
@@ -128,15 +122,17 @@ private:
     QString m_myCode;
     QString m_pendingChallengeTarget;
 
-    // Room I created for a challenge I sent, waiting for the target to join
-    // (kept connected/open until then -- see onLobbyRoomListChanged).
-    quint64 m_hostedChallengeRoomId = 0;
-    QString m_hostedChallengeOpponent;
-
-    // A challenge someone else sent me, detected by room-naming convention
+    struct PendingChallenge
+    {
+        quint64 roomId = 0;
+        QString nickname;
+    };
+    // Challenges I sent, waiting for the target to join (each room stays
+    // open/connected until then -- see onLobbyRoomListChanged).
+    QList<PendingChallenge> m_outgoingChallenges;
+    // Challenges sent to me, detected by room-naming convention
     // ("RETO:<my nickname>").
-    quint64 m_incomingChallengeRoomId = 0;
-    QString m_incomingChallengerName;
+    QList<PendingChallenge> m_incomingChallenges;
 };
 
 #endif // LAUNCHERWINDOW_HPP
