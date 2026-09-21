@@ -20,6 +20,8 @@
 #include <QByteArray>
 #include <QDesktopServices>
 #include <QColor>
+#include <QMenu>
+#include <QAction>
 
 // Misma anon key publica que usa la web (config.js) y RMG-K (OnlineBridge.cpp)
 // -- nunca la service_role key.
@@ -173,23 +175,6 @@ void LauncherWindow::buildUi()
     connect(m_challengeBtn, &QPushButton::clicked, this, &LauncherWindow::onChallengeButtonClicked);
     connect(m_challengeTargetInput, &QLineEdit::returnPressed, this, &LauncherWindow::onChallengeButtonClicked);
 
-    side->addSpacing(12);
-
-    auto* friendLabel = new QLabel(QStringLiteral("AGREGAR AMIGO"), sidebar);
-    friendLabel->setObjectName("sectionLabel");
-    side->addWidget(friendLabel);
-
-    m_addFriendInput = new QLineEdit(sidebar);
-    m_addFriendInput->setPlaceholderText(QStringLiteral("Nickname"));
-    side->addWidget(m_addFriendInput);
-
-    m_addFriendBtn = new QPushButton(QStringLiteral("Agregar"), sidebar);
-    m_addFriendBtn->setEnabled(false);
-    side->addWidget(m_addFriendBtn);
-
-    connect(m_addFriendBtn, &QPushButton::clicked, this, &LauncherWindow::onAddFriendClicked);
-    connect(m_addFriendInput, &QLineEdit::returnPressed, this, &LauncherWindow::onAddFriendClicked);
-
     root->addWidget(sidebar);
 
     // ==================== Panel derecho: presencia ====================
@@ -239,10 +224,12 @@ void LauncherWindow::buildUi()
 
     m_presenceList = new QListWidget(main);
     m_presenceList->setSpacing(4);
+    m_presenceList->setContextMenuPolicy(Qt::CustomContextMenu);
     mainLayout->addWidget(m_presenceList, 1);
     connect(m_presenceList, &QListWidget::itemDoubleClicked, this, &LauncherWindow::onPresenceItemDoubleClicked);
+    connect(m_presenceList, &QListWidget::customContextMenuRequested, this, &LauncherWindow::onPresenceContextMenuRequested);
 
-    auto* hint = new QLabel(QStringLiteral("Doble click en un jugador para desafiarlo"), main);
+    auto* hint = new QLabel(QStringLiteral("Doble click para desafiar - click derecho para agregar de amigo"), main);
     hint->setObjectName("hintLabel");
     mainLayout->addWidget(hint);
 
@@ -382,7 +369,6 @@ void LauncherWindow::onResolveCodeReply(QNetworkReply* reply)
     setStatus(QStringLiteral("Conectando al Lobby..."));
     m_lobbyClient->connectToServer(LOBBY_SERVER_URL, nickname, {});
 
-    m_addFriendBtn->setEnabled(true);
     fetchFriends();
     refreshRosterDisplay();
 }
@@ -487,6 +473,11 @@ QString LauncherWindow::statusSuffixFor(const QString& nickname) const
 void LauncherWindow::refreshRosterDisplay()
 {
     m_presenceList->clear();
+
+    // Sin identificarse todavia no sabemos cual nickname es "yo mismo" para
+    // excluirlo de la lista -- mejor no mostrar nada hasta que conecte.
+    if (m_myNickname.isEmpty())
+        return;
 
     // Los conectados/jugando primero (siguen ordenados por rango dentro de
     // cada grupo), para que resalten sin tener que buscarlos en la lista.
@@ -599,15 +590,6 @@ void LauncherWindow::refreshFriendsDisplay()
     }
 }
 
-void LauncherWindow::onAddFriendClicked()
-{
-    const QString target = m_addFriendInput->text().trimmed();
-    if (target.isEmpty() || m_myCode.isEmpty())
-        return;
-    sendFriendRequest(target);
-    m_addFriendInput->clear();
-}
-
 void LauncherWindow::sendFriendRequest(const QString& targetNickname)
 {
     QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/rpc/send_friend_request").arg(SUPABASE_URL)));
@@ -668,6 +650,20 @@ void LauncherWindow::onPresenceItemDoubleClicked()
     if (item == nullptr)
         return;
     m_challengeTargetInput->setText(item->data(Qt::UserRole).toString());
+}
+
+void LauncherWindow::onPresenceContextMenuRequested(const QPoint& pos)
+{
+    QListWidgetItem* item = m_presenceList->itemAt(pos);
+    if (item == nullptr || m_myCode.isEmpty())
+        return;
+
+    const QString nickname = item->data(Qt::UserRole).toString();
+    QMenu menu(m_presenceList);
+    QAction* addFriendAction = menu.addAction(QStringLiteral("Agregar a %1 de amigo").arg(nickname));
+    QAction* chosen = menu.exec(m_presenceList->mapToGlobal(pos));
+    if (chosen == addFriendAction)
+        sendFriendRequest(nickname);
 }
 
 void LauncherWindow::onChallengeButtonClicked()

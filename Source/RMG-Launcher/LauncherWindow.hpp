@@ -17,6 +17,7 @@
 #include <QStringList>
 #include <QHash>
 #include <QList>
+#include <QPoint>
 
 using LobbyClient = UserInterface::Dialog::LobbyClient;
 
@@ -57,8 +58,8 @@ private slots:
     void onAcceptChallengeClicked();
     void onDeclineChallengeClicked();
     void onPresenceItemDoubleClicked();
+    void onPresenceContextMenuRequested(const QPoint& pos);
     void onWebsiteButtonClicked();
-    void onAddFriendClicked();
 
 private:
     void buildUi();
@@ -90,8 +91,6 @@ private:
     QListWidget* m_presenceList = nullptr;
     QLineEdit*   m_challengeTargetInput = nullptr;
     QPushButton* m_challengeBtn = nullptr;
-    QLineEdit*   m_addFriendInput = nullptr;
-    QPushButton* m_addFriendBtn = nullptr;
     QListWidget* m_friendsList = nullptr;
 
     QWidget*     m_incomingBanner = nullptr;
