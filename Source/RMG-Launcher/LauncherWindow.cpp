@@ -22,6 +22,11 @@
 #include <QColor>
 #include <QMenu>
 #include <QAction>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QSequentialAnimationGroup>
+#include <QEasingCurve>
+#include <QAbstractAnimation>
 
 // Misma anon key publica que usa la web (config.js) y RMG-K (OnlineBridge.cpp)
 // -- nunca la service_role key.
@@ -63,6 +68,37 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
 
     buildUi();
     applyStylesheet();
+
+    // Fundido de entrada de la ventana: liviano (solo opacidad, una vez, se
+    // borra sola al terminar).
+    auto* windowFadeEffect = new QGraphicsOpacityEffect(this);
+    setGraphicsEffect(windowFadeEffect);
+    windowFadeEffect->setOpacity(0.0);
+    auto* windowFade = new QPropertyAnimation(windowFadeEffect, "opacity", this);
+    windowFade->setStartValue(0.0);
+    windowFade->setEndValue(1.0);
+    windowFade->setDuration(260);
+    windowFade->setEasingCurve(QEasingCurve::OutCubic);
+    windowFade->start(QAbstractAnimation::DeleteWhenStopped);
+
+    // Pulso suave del aviso de desafio, para que resalte sin ser un parpadeo
+    // brusco -- mismo espiritu que el punto "en vivo" de la web.
+    auto* bannerEffect = new QGraphicsOpacityEffect(m_incomingBanner);
+    m_incomingBanner->setGraphicsEffect(bannerEffect);
+    auto* pulseUp = new QPropertyAnimation(bannerEffect, "opacity");
+    pulseUp->setStartValue(0.6);
+    pulseUp->setEndValue(1.0);
+    pulseUp->setDuration(700);
+    pulseUp->setEasingCurve(QEasingCurve::InOutSine);
+    auto* pulseDown = new QPropertyAnimation(bannerEffect, "opacity");
+    pulseDown->setStartValue(1.0);
+    pulseDown->setEndValue(0.6);
+    pulseDown->setDuration(700);
+    pulseDown->setEasingCurve(QEasingCurve::InOutSine);
+    m_bannerPulse = new QSequentialAnimationGroup(this);
+    m_bannerPulse->addAnimation(pulseUp);
+    m_bannerPulse->addAnimation(pulseDown);
+    m_bannerPulse->setLoopCount(-1);
 
     m_network = new QNetworkAccessManager(this);
     connect(m_network, &QNetworkAccessManager::finished, this, &LauncherWindow::onResolveCodeReply);
@@ -751,10 +787,15 @@ void LauncherWindow::showIncomingChallenge(const QString& challenger)
     m_incomingBanner->setVisible(true);
     m_acceptBtn->setEnabled(true);
     m_declineBtn->setEnabled(true);
+    if (m_bannerPulse->state() != QAbstractAnimation::Running)
+        m_bannerPulse->start();
 }
 
 void LauncherWindow::clearIncomingChallenge()
 {
+    m_bannerPulse->stop();
+    if (auto* effect = qobject_cast<QGraphicsOpacityEffect*>(m_incomingBanner->graphicsEffect()))
+        effect->setOpacity(1.0);
     m_incomingBanner->setVisible(false);
 }
 

@@ -27,6 +27,8 @@ class QLabel;
 class QListWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QGraphicsOpacityEffect;
+class QSequentialAnimationGroup;
 
 class LauncherWindow : public QWidget
 {
@@ -96,6 +98,9 @@ private:
     QLabel*      m_incomingLabel = nullptr;
     QPushButton* m_acceptBtn = nullptr;
     QPushButton* m_declineBtn = nullptr;
+    // Pulso de atencion en el aviso de desafio, y fundido de entrada de la
+    // ventana -- animaciones livianas (solo opacidad, sin GPU/paint extra).
+    QSequentialAnimationGroup* m_bannerPulse = nullptr;
 
     // ---- Networking (Supabase) ----
     QNetworkAccessManager* m_network = nullptr;
