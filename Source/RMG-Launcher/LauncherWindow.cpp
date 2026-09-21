@@ -27,6 +27,7 @@
 #include <QSequentialAnimationGroup>
 #include <QEasingCurve>
 #include <QAbstractAnimation>
+#include <QSize>
 
 // Misma anon key publica que usa la web (config.js) y RMG-K (OnlineBridge.cpp)
 // -- nunca la service_role key.
@@ -599,7 +600,12 @@ void LauncherWindow::refreshFriendsDisplay()
         connect(acceptBtn, &QPushButton::clicked, this, [this, nickname]() { respondFriendRequest(nickname, true); });
         connect(declineBtn, &QPushButton::clicked, this, [this, nickname]() { respondFriendRequest(nickname, false); });
 
-        item->setSizeHint(row->sizeHint());
+        // row->sizeHint() no sirve aca: el widget todavia no paso por un
+        // ciclo de layout real (recien se creo, nunca se mostro), asi que
+        // Qt no tiene como saber cuanto espacio necesitan el texto y los
+        // botones -- devuelve un tamano chico/vacio y la fila se ve en
+        // blanco. Un alto fijo evita depender de esa medicion temprana.
+        item->setSizeHint(QSize(0, 44));
         m_friendsList->setItemWidget(item, row);
     }
 }
@@ -800,7 +806,10 @@ void LauncherWindow::refreshPendingChallengesDisplay()
         connect(acceptBtn, &QPushButton::clicked, this, [this, roomId]() { respondToChallenge(roomId, true); });
         connect(declineBtn, &QPushButton::clicked, this, [this, roomId]() { respondToChallenge(roomId, false); });
 
-        item->setSizeHint(row->sizeHint());
+        // Alto fijo en vez de row->sizeHint(): recien creado, sin haber
+        // pasado por un ciclo de layout, ese sizeHint da un tamano chico o
+        // vacio y la fila se ve en blanco (bug real visto en la prueba).
+        item->setSizeHint(QSize(0, 44));
         m_pendingList->setItemWidget(item, row);
         startPulse(row);
     }
