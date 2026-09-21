@@ -53,7 +53,7 @@ static QString tierForPoints(double points)
 LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
 {
     setWindowTitle(QStringLiteral("Smash Remix Launcher"));
-    resize(420, 560);
+    resize(880, 520);
 
     buildUi();
     applyStylesheet();
@@ -90,110 +90,183 @@ LauncherWindow::~LauncherWindow() = default;
 
 void LauncherWindow::buildUi()
 {
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 20, 20, 20);
-    root->setSpacing(14);
+    auto* root = new QHBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
-    auto* title = new QLabel(QStringLiteral("SMASH REMIX"), this);
+    // ==================== Panel izquierdo: cuenta / acciones ====================
+    auto* sidebar = new QWidget(this);
+    sidebar->setObjectName("sidebar");
+    sidebar->setFixedWidth(300);
+    auto* side = new QVBoxLayout(sidebar);
+    side->setContentsMargins(28, 32, 28, 28);
+    side->setSpacing(16);
+
+    auto* title = new QLabel(QStringLiteral("SMASH<span style=\"color:#0ac8b9;\">REMIX</span>"), sidebar);
     title->setObjectName("brandTitle");
-    root->addWidget(title);
+    title->setTextFormat(Qt::RichText);
+    side->addWidget(title);
 
-    // ---- Login ----
-    auto* codeRow = new QHBoxLayout();
-    m_codeInput = new QLineEdit(this);
+    auto* subtitle = new QLabel(QStringLiteral("LAUNCHER"), sidebar);
+    subtitle->setObjectName("brandSubtitle");
+    side->addWidget(subtitle);
+
+    side->addSpacing(12);
+
+    m_codeInput = new QLineEdit(sidebar);
     m_codeInput->setPlaceholderText(QStringLiteral("Tu codigo de jugador"));
-    m_connectBtn = new QPushButton(QStringLiteral("Conectar"), this);
-    codeRow->addWidget(m_codeInput, 1);
-    codeRow->addWidget(m_connectBtn);
-    root->addLayout(codeRow);
+    side->addWidget(m_codeInput);
+
+    m_connectBtn = new QPushButton(QStringLiteral("Conectar"), sidebar);
+    m_connectBtn->setObjectName("primaryBtn");
+    side->addWidget(m_connectBtn);
 
     connect(m_connectBtn, &QPushButton::clicked, this, &LauncherWindow::onConnectClicked);
     connect(m_codeInput, &QLineEdit::returnPressed, this, &LauncherWindow::onConnectClicked);
 
-    m_myNicknameLabel = new QLabel(this);
+    m_myNicknameLabel = new QLabel(sidebar);
     m_myNicknameLabel->setObjectName("nicknameLabel");
-    root->addWidget(m_myNicknameLabel);
+    m_myNicknameLabel->setWordWrap(true);
+    side->addWidget(m_myNicknameLabel);
 
-    m_statusLabel = new QLabel(QStringLiteral("Escribi tu codigo y confirma con Conectar."), this);
+    m_statusLabel = new QLabel(QStringLiteral("Escribi tu codigo y confirma con Conectar."), sidebar);
     m_statusLabel->setObjectName("statusLabel");
     m_statusLabel->setWordWrap(true);
-    root->addWidget(m_statusLabel);
+    side->addWidget(m_statusLabel);
 
-    // ---- Incoming challenge banner ----
-    m_incomingBanner = new QWidget(this);
+    side->addStretch(1);
+
+    auto* challengeLabel = new QLabel(QStringLiteral("DESAFIAR"), sidebar);
+    challengeLabel->setObjectName("sectionLabel");
+    side->addWidget(challengeLabel);
+
+    m_challengeTargetInput = new QLineEdit(sidebar);
+    m_challengeTargetInput->setPlaceholderText(QStringLiteral("Nickname del rival"));
+    side->addWidget(m_challengeTargetInput);
+
+    m_challengeBtn = new QPushButton(QStringLiteral("Enviar desafio"), sidebar);
+    m_challengeBtn->setObjectName("primaryBtn");
+    m_challengeBtn->setEnabled(false);
+    side->addWidget(m_challengeBtn);
+
+    connect(m_challengeBtn, &QPushButton::clicked, this, &LauncherWindow::onChallengeButtonClicked);
+    connect(m_challengeTargetInput, &QLineEdit::returnPressed, this, &LauncherWindow::onChallengeButtonClicked);
+
+    root->addWidget(sidebar);
+
+    // ==================== Panel derecho: presencia ====================
+    auto* main = new QWidget(this);
+    main->setObjectName("mainPanel");
+    auto* mainLayout = new QVBoxLayout(main);
+    mainLayout->setContentsMargins(28, 32, 28, 28);
+    mainLayout->setSpacing(14);
+
+    // Aviso de desafio entrante: banner ancho arriba de la lista, para que
+    // resalte de inmediato sin importar cuantos jugadores haya online.
+    m_incomingBanner = new QWidget(main);
     m_incomingBanner->setObjectName("incomingBanner");
-    auto* bannerLayout = new QVBoxLayout(m_incomingBanner);
+    auto* bannerLayout = new QHBoxLayout(m_incomingBanner);
+    bannerLayout->setContentsMargins(16, 12, 16, 12);
     m_incomingLabel = new QLabel(m_incomingBanner);
     m_incomingLabel->setObjectName("incomingLabel");
     m_incomingLabel->setWordWrap(true);
-    bannerLayout->addWidget(m_incomingLabel);
-    auto* bannerBtnRow = new QHBoxLayout();
+    bannerLayout->addWidget(m_incomingLabel, 1);
     m_acceptBtn = new QPushButton(QStringLiteral("Aceptar"), m_incomingBanner);
     m_acceptBtn->setObjectName("acceptBtn");
     m_declineBtn = new QPushButton(QStringLiteral("Rechazar"), m_incomingBanner);
-    bannerBtnRow->addWidget(m_acceptBtn);
-    bannerBtnRow->addWidget(m_declineBtn);
-    bannerLayout->addLayout(bannerBtnRow);
+    bannerLayout->addWidget(m_acceptBtn);
+    bannerLayout->addWidget(m_declineBtn);
     m_incomingBanner->setVisible(false);
-    root->addWidget(m_incomingBanner);
+    mainLayout->addWidget(m_incomingBanner);
 
     connect(m_acceptBtn, &QPushButton::clicked, this, &LauncherWindow::onAcceptChallengeClicked);
     connect(m_declineBtn, &QPushButton::clicked, this, &LauncherWindow::onDeclineChallengeClicked);
 
-    // ---- Presence ----
-    auto* onlineLabel = new QLabel(QStringLiteral("-- ONLINE --"), this);
+    auto* onlineHeader = new QHBoxLayout();
+    auto* onlineLabel = new QLabel(QStringLiteral("-- ONLINE --"), main);
     onlineLabel->setObjectName("sectionLabel");
-    root->addWidget(onlineLabel);
+    onlineHeader->addWidget(onlineLabel);
+    onlineHeader->addStretch(1);
+    mainLayout->addLayout(onlineHeader);
 
-    m_presenceList = new QListWidget(this);
-    root->addWidget(m_presenceList, 1);
+    m_presenceList = new QListWidget(main);
+    m_presenceList->setSpacing(4);
+    mainLayout->addWidget(m_presenceList, 1);
     connect(m_presenceList, &QListWidget::itemDoubleClicked, this, &LauncherWindow::onPresenceItemDoubleClicked);
 
-    // ---- Challenge ----
-    auto* challengeRow = new QHBoxLayout();
-    m_challengeTargetInput = new QLineEdit(this);
-    m_challengeTargetInput->setPlaceholderText(QStringLiteral("Nickname a desafiar"));
-    m_challengeBtn = new QPushButton(QStringLiteral("Desafiar"), this);
-    m_challengeBtn->setEnabled(false);
-    challengeRow->addWidget(m_challengeTargetInput, 1);
-    challengeRow->addWidget(m_challengeBtn);
-    root->addLayout(challengeRow);
+    auto* hint = new QLabel(QStringLiteral("Doble click en un jugador para desafiarlo"), main);
+    hint->setObjectName("hintLabel");
+    mainLayout->addWidget(hint);
 
-    connect(m_challengeBtn, &QPushButton::clicked, this, &LauncherWindow::onChallengeButtonClicked);
-    connect(m_challengeTargetInput, &QLineEdit::returnPressed, this, &LauncherWindow::onChallengeButtonClicked);
+    root->addWidget(main, 1);
 }
 
 void LauncherWindow::applyStylesheet()
 {
     setStyleSheet(R"(
-        QWidget { background: #010a13; color: #cdbe9e; font-family: "Segoe UI", sans-serif; font-size: 13px; }
-        #brandTitle { color: #f0e6d2; font-size: 22px; font-weight: 700; letter-spacing: 2px; }
-        #sectionLabel { color: #0ac8b9; font-weight: 700; letter-spacing: 1px; margin-top: 6px; }
-        #nicknameLabel { color: #f0e6d2; font-weight: 600; }
+        QWidget { background: #050d17; color: #cdbe9e; font-family: "Segoe UI", sans-serif; font-size: 13px; }
+
+        #sidebar {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #0a1428, stop:1 #050d17);
+            border-right: 1px solid #785a28;
+        }
+        #mainPanel { background: #010a13; }
+
+        #brandTitle { color: #f0e6d2; font-size: 24px; font-weight: 700; letter-spacing: 1px; }
+        #brandSubtitle {
+            color: #785a28; font-size: 11px; font-weight: 700;
+            letter-spacing: 4px; margin-top: -6px; margin-bottom: 8px;
+        }
+        #sectionLabel {
+            color: #0ac8b9; font-weight: 700; font-size: 12px;
+            letter-spacing: 2px; text-transform: uppercase;
+        }
+        #nicknameLabel { color: #f0e6d2; font-weight: 600; font-size: 14px; }
         #statusLabel { color: #a09b8c; }
+        #hintLabel { color: #5a5548; font-size: 11px; }
+
         QLineEdit {
             background: #010a13; border: 1px solid #785a28; color: #f0e6d2;
-            padding: 8px; border-radius: 2px;
+            padding: 10px 12px; border-radius: 3px;
         }
-        QLineEdit:focus { border-color: #0ac8b9; }
+        QLineEdit:focus { border: 1px solid #0ac8b9; }
+
         QPushButton {
-            background: #0b1c2c; border: 1px solid #c8aa6e; color: #f0e6d2;
-            padding: 8px 16px; border-radius: 2px; font-weight: 600;
+            background: transparent; border: 1px solid #785a28; color: #cdbe9e;
+            padding: 9px 16px; border-radius: 3px; font-weight: 600;
         }
-        QPushButton:hover:!disabled { background: #c8aa6e; color: #0a0f16; }
-        QPushButton:disabled { color: #5a5548; border-color: #3a3020; }
+        QPushButton:hover:!disabled { border-color: #c8aa6e; color: #f0e6d2; }
+        QPushButton:disabled { color: #4a4638; border-color: #2a2418; }
+
+        #primaryBtn {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1e2328, stop:1 #0a1428);
+            border: 1px solid #c8aa6e; color: #f0e6d2;
+        }
+        #primaryBtn:hover:!disabled { background: #c8aa6e; color: #0a0f16; }
+        #primaryBtn:disabled { background: transparent; }
+
         QListWidget {
-            background: #0b1c2c; border: 1px solid #785a28; border-radius: 2px;
-            padding: 4px;
+            background: transparent; border: none;
         }
-        QListWidget::item { padding: 6px; }
-        QListWidget::item:hover { background: rgba(10, 200, 185, 0.12); }
+        QListWidget::item {
+            background: #0b1c2c; border: 1px solid #2a2418;
+            border-radius: 4px; padding: 10px 14px; margin-bottom: 2px;
+            color: #f0e6d2; font-size: 14px;
+        }
+        QListWidget::item:hover { border-color: #0ac8b9; background: #0d2230; }
+        QListWidget::item:selected { border-color: #c8aa6e; background: #14283a; }
+
         #incomingBanner {
-            background: #241a06; border: 1px solid #f5c542; border-radius: 3px; padding: 10px;
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2b2007, stop:1 #1a1404);
+            border: 1px solid #f5c542; border-radius: 4px;
         }
-        #incomingLabel { color: #f5c542; font-weight: 700; }
+        #incomingLabel { color: #f5c542; font-weight: 700; font-size: 14px; background: transparent; }
         #acceptBtn { border-color: #0ac8b9; }
         #acceptBtn:hover { background: #0ac8b9; color: #010a13; }
+
+        QScrollBar:vertical { background: transparent; width: 8px; }
+        QScrollBar::handle:vertical { background: #785a28; border-radius: 4px; min-height: 24px; }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     )");
 }
 
