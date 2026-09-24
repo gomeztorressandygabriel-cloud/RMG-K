@@ -177,6 +177,11 @@ private:
     QString lobbyStateFor(const QString& nickname) const;
     void fetchFriends();
     void refreshFriendsDisplay();
+    // Logros, rachas y eventos del dia: se calculan con las partidas del
+    // jugador (ver AchievementLogic.hpp) y se avisan como notificacion.
+    void checkAchievements();
+    void onAchProfileReply(QNetworkReply* reply);
+    void onAchMatchesReply(QNetworkReply* reply);
     // Nivel de experiencia (sin tope): 100 XP por partida + 50 por victoria.
     // La misma cuenta esta en la web (config.js, levelInfo).
     void fetchLevels();
@@ -294,6 +299,10 @@ private:
         bool iAmRequester = false;
     };
     QList<FriendEntry> m_friends;
+    bool    m_achChecked = false;
+    bool    m_achBusy = false;
+    qint64  m_lastAchXp = -1;
+    QString m_myProfileId;
     QHash<QString, qint64> m_xp; // nickname -> XP total
     QString m_presenceMode = QStringLiteral("online"); // online | dnd | searching
     QString m_modeBeforeSearch = QStringLiteral("online");

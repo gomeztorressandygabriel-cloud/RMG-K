@@ -1,4 +1,5 @@
 #include "LauncherWindow.hpp"
+#include "AchievementLogic.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -285,6 +286,10 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
             onSendFriendRequestReply(reply);
         else if (op == QStringLiteral("respond"))
             onRespondFriendRequestReply(reply);
+        else if (op == QStringLiteral("ach_profile"))
+            onAchProfileReply(reply);
+        else if (op == QStringLiteral("ach_matches"))
+            onAchMatchesReply(reply);
         else if (op == QStringLiteral("levels"))
             onLevelsReply(reply);
         else if (op == QStringLiteral("h2h"))
@@ -1085,6 +1090,10 @@ void LauncherWindow::onResolveCodeReply(QNetworkReply* reply)
     m_friendsTick = 0;
     m_friendsLoadedOnce = false;
     m_friendsTimer->start();
+    m_achChecked = false;
+    m_lastAchXp = -1;
+    m_myProfileId.clear();
+    QTimer::singleShot(4000, this, [this]() { checkAchievements(); });
 
     setStatus(QStringLiteral("Conectando al Lobby..."));
     m_lobbyClient->connectToServer(LOBBY_SERVER_URL, nickname, {});
@@ -1724,6 +1733,111 @@ void LauncherWindow::onDmUnreadReply(QNetworkReply* reply)
     }
 }
 
+void LauncherWindow::checkAchievements()
+{
+    if (m_myNickname.isEmpty() || m_achBusy)
+        return;
+    m_achBusy = true;
+
+    // Primero el id del perfil (la lectura publica del ranking lo permite),
+    // despues todas sus partidas en orden cronologico.
+    if (m_myProfileId.isEmpty())
+    {
+        QNetworkRequest req(QUrl(QStringLiteral("%1/rest/v1/profiles?select=id&nickname=eq.%2")
+            .arg(SUPABASE_URL, QString::fromUtf8(QUrl::toPercentEncoding(m_myNickname)))));
+        req.setRawHeader("apikey", SUPABASE_ANON_KEY);
+        req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
+        req.setTransferTimeout(10000);
+        QNetworkReply* reply = m_friendsNetwork->get(req);
+        reply->setProperty("op", "ach_profile");
+        return;
+    }
+
+    QNetworkRequest req(QUrl(QStringLiteral(
+        "%1/rest/v1/match_players?select=result,character_id,max_combo_dealt,matches(played_at)"
+        "&player_id=eq.%2&result=not.is.null&order=matches(played_at).asc&limit=5000")
+        .arg(SUPABASE_URL, m_myProfileId)));
+    req.setRawHeader("apikey", SUPABASE_ANON_KEY);
+    req.setRawHeader("Authorization", QByteArray("Bearer ") + SUPABASE_ANON_KEY);
+    req.setTransferTimeout(15000);
+    QNetworkReply* reply = m_friendsNetwork->get(req);
+    reply->setProperty("op", "ach_matches");
+}
+
+void LauncherWindow::onAchProfileReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError)
+    {
+        m_achBusy = false;
+        return;
+    }
+    const QJsonArray arr = QJsonDocument::fromJson(reply->readAll()).array();
+    if (arr.isEmpty())
+    {
+        m_achBusy = false;
+        return;
+    }
+    m_myProfileId = arr.at(0).toObject().value("id").toString();
+    m_achBusy = false;
+    checkAchievements();
+}
+
+void LauncherWindow::onAchMatchesReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    m_achBusy = false;
+    if (reply->error() != QNetworkReply::NoError || m_myNickname.isEmpty())
+        return;
+    const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    if (!doc.isArray())
+        return;
+
+    QList<Achievements::Match> matches;
+    for (const QJsonValue& v : doc.array())
+    {
+        const QJsonObject o = v.toObject();
+        Achievements::Match m;
+        m.playedMs = QDateTime::fromString(o.value("matches").toObject().value("played_at").toString(), Qt::ISODate)
+                         .toMSecsSinceEpoch();
+        m.win = (o.value("result").toString() == QStringLiteral("win"));
+        m.characterId = o.value("character_id").isNull() ? -1 : o.value("character_id").toInt();
+        m.combo = o.value("max_combo_dealt").isNull() ? 0 : o.value("max_combo_dealt").toInt();
+        matches.append(m);
+    }
+
+    QSettings settings("RMG-K", "n02");
+    const QString base = QStringLiteral("Launcher/Ach/%1/").arg(m_myNickname);
+    const bool seed = !settings.contains(base + "LastMs");
+    const QStringList unlocked = settings.value(base + "Unlocked").toStringList();
+    const qint64 lastMs = settings.value(base + "LastMs", 0).toLongLong();
+
+    const Achievements::Result result = Achievements::evaluate(matches, unlocked, lastMs, seed);
+
+    settings.setValue(base + "Unlocked", result.unlocked);
+    settings.setValue(base + "LastMs", QString::number(qMax(result.lastMs, lastMs)));
+    m_achChecked = true;
+
+    if (result.events.isEmpty())
+        return;
+
+    // Cada novedad queda en el chat del launcher (registro) y se avisa con
+    // UNA sola notificacion, para que no se pisen unas a otras.
+    QStringList lines;
+    for (const Achievements::Event& e : result.events)
+    {
+        appendChatLine(QStringLiteral("Logro"), QStringLiteral("%1 - %2").arg(e.title, e.text), true);
+        if (lines.size() < 4)
+            lines << QStringLiteral("%1: %2").arg(e.title, e.text);
+    }
+    const QString title = (result.events.size() == 1) ? result.events.first().title
+                                                      : QStringLiteral("%1 novedades").arg(result.events.size());
+    QString body = (result.events.size() == 1) ? result.events.first().text : lines.join(QStringLiteral("\n"));
+    if (result.events.size() > lines.size())
+        body += QStringLiteral("\n... y %1 mas").arg(result.events.size() - lines.size());
+    notifyToast(title, body);
+}
+
 void LauncherWindow::fetchLevels()
 {
     postFriendsRpc(QStringLiteral("player_stats_all"), QJsonObject(), "levels");
@@ -1753,6 +1867,16 @@ void LauncherWindow::onLevelsReply(QNetworkReply* reply)
     m_xp = fresh;
     refreshRosterDisplay();
     refreshMyLevelLabel();
+
+    if (!m_myNickname.isEmpty())
+    {
+        const qint64 myXpNow = m_xp.value(m_myNickname, 0);
+        if (!m_achChecked || myXpNow != m_lastAchXp)
+        {
+            m_lastAchXp = myXpNow;
+            checkAchievements();
+        }
+    }
 
     // Aviso de subida de nivel (solo si ya conocia mi nivel de antes).
     if (before > 0 && !m_myNickname.isEmpty())
@@ -2870,6 +2994,8 @@ void LauncherWindow::logOut()
     m_knownIncomingRequests.clear();
     m_knownOutgoing.clear();
     m_friendsLoadedOnce = false;
+    m_achChecked = false;
+    m_myProfileId.clear();
     showListTab(false);
     if (m_lobbyClient != nullptr)
         m_lobbyClient->disconnectFromServer();
