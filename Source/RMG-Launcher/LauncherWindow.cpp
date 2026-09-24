@@ -98,6 +98,23 @@ static const char* const WEBSITE_URL = "https://smashremix.netlify.app/";
 static const char* const UPDATE_MANIFEST_URL =
     "https://raw.githubusercontent.com/gomeztorressandygabriel-cloud/smash-remix-online/main/version.json";
 
+// Nivel de experiencia. XP total para llegar al nivel L: 25*(L-1)*(L+6); subir
+// del nivel N al siguiente cuesta 50*N + 150. Misma cuenta que la web.
+static qint64 xpTotalForLevel(int level)
+{
+    return 25LL * (level - 1) * (level + 6);
+}
+
+static int levelFromXp(qint64 xp)
+{
+    int level = qMax(1, static_cast<int>(std::floor((-5.0 + std::sqrt(49.0 + xp / 6.25)) / 2.0)));
+    while (xpTotalForLevel(level + 1) <= xp)
+        ++level;
+    while (level > 1 && xpTotalForLevel(level) > xp)
+        --level;
+    return level;
+}
+
 // Replica los mismos umbrales que src/js/config.js en la pagina web.
 static QString tierForPoints(double points)
 {
@@ -268,6 +285,8 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
             onSendFriendRequestReply(reply);
         else if (op == QStringLiteral("respond"))
             onRespondFriendRequestReply(reply);
+        else if (op == QStringLiteral("levels"))
+            onLevelsReply(reply);
         else if (op == QStringLiteral("h2h"))
             onH2hReply(reply);
         else if (op == QStringLiteral("dm_list"))
@@ -364,6 +383,7 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent)
     }
 
     fetchFullRoster();
+    fetchLevels();
 
     // Primero actualizar, despues conectar. El archivo "no-autoupdate.txt" junto
     // al .exe lo desactiva (copias de prueba que no deben pisarse).
@@ -1043,6 +1063,7 @@ void LauncherWindow::onResolveCodeReply(QNetworkReply* reply)
 
     m_myNickname = nickname;
     m_myNicknameLabel->setText(nickname);
+    refreshMyLevelLabel();
     m_avatarLabel->setText(nickname.left(1).toUpper());
     m_accountCard->show();
     m_preLoginStatus->hide();
@@ -1247,8 +1268,8 @@ void LauncherWindow::refreshRosterDisplay()
         item->setData(Qt::UserRole + 1, tierForPoints(entry->rankPoints));
         // El punto de color ya dice si esta en linea; solo se escribe el
         // estado cuando aporta algo mas ("en partida").
-        item->setText(QStringLiteral("%1%2")
-            .arg(entry->nickname,
+        item->setText(QStringLiteral("%1%2%3")
+            .arg(entry->nickname, levelSuffix(entry->nickname),
                  state == QStringLiteral("playing") ? QStringLiteral("   en partida") : QString()));
         item->setIcon(rosterIcon(dotColorForState(state), tierForPoints(entry->rankPoints), offline));
         if (offline)
@@ -1417,7 +1438,7 @@ void LauncherWindow::refreshFriendsDisplay()
         const int unread = m_dmUnread.value(row.nickname, 0);
         unreadTotal += unread;
 
-        QString text = row.nickname;
+        QString text = row.nickname + levelSuffix(row.nickname);
         if (row.state == QStringLiteral("playing"))
             text += QStringLiteral("   en partida");
         else if (offline)
@@ -1701,6 +1722,71 @@ void LauncherWindow::onDmUnreadReply(QNetworkReply* reply)
         m_dmUnread = unread;
         refreshFriendsDisplay();
     }
+}
+
+void LauncherWindow::fetchLevels()
+{
+    postFriendsRpc(QStringLiteral("player_stats_all"), QJsonObject(), "levels");
+}
+
+void LauncherWindow::onLevelsReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError)
+        return;
+    const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    if (!doc.isArray())
+        return;
+
+    QHash<QString, qint64> fresh;
+    for (const QJsonValue& v : doc.array())
+    {
+        const QJsonObject row = v.toObject();
+        fresh.insert(row.value("nickname").toString(),
+                     static_cast<qint64>(row.value("games").toDouble()) * 100 +
+                     static_cast<qint64>(row.value("wins").toDouble()) * 50);
+    }
+    if (fresh == m_xp)
+        return;
+
+    const int before = m_myNickname.isEmpty() ? 0 : levelFromXp(m_xp.value(m_myNickname, 0));
+    m_xp = fresh;
+    refreshRosterDisplay();
+    refreshMyLevelLabel();
+
+    // Aviso de subida de nivel (solo si ya conocia mi nivel de antes).
+    if (before > 0 && !m_myNickname.isEmpty())
+    {
+        const int after = levelFromXp(m_xp.value(m_myNickname, 0));
+        if (after > before)
+            notifyToast(QStringLiteral("Subiste de nivel!"), QStringLiteral("Ahora sos nivel %1.").arg(after));
+    }
+}
+
+QString LauncherWindow::levelSuffix(const QString& nickname) const
+{
+    if (!m_xp.contains(nickname))
+        return QString();
+    return QStringLiteral("   Nv %1").arg(levelFromXp(m_xp.value(nickname)));
+}
+
+void LauncherWindow::refreshMyLevelLabel()
+{
+    if (m_myNicknameLabel == nullptr || m_myNickname.isEmpty())
+        return;
+    if (!m_xp.contains(m_myNickname))
+    {
+        m_myNicknameLabel->setText(m_myNickname);
+        return;
+    }
+    const qint64 xp = m_xp.value(m_myNickname);
+    const int level = levelFromXp(xp);
+    const qint64 current = xp - xpTotalForLevel(level);
+    const qint64 need = xpTotalForLevel(level + 1) - xpTotalForLevel(level);
+    m_myNicknameLabel->setText(QStringLiteral("%1  <span style='color:#c8aa6e; font-size:11px; font-weight:600;'>Nv %2</span>")
+        .arg(m_myNickname.toHtmlEscaped()).arg(level));
+    m_myNicknameLabel->setToolTip(QStringLiteral("Nivel %1  -  %2/%3 XP para el siguiente\n%4 XP en total")
+        .arg(level).arg(current).arg(need).arg(xp));
 }
 
 void LauncherWindow::setPresenceMode(const QString& mode)
@@ -2049,6 +2135,12 @@ void LauncherWindow::onFriendsTick()
         fetchUnreadDms();
     if ((m_friendsTick % 4) == 0)
         fetchFriends();
+    // Cada ~60 s: puntos de todos y niveles (antes el ranking se pedia una sola vez).
+    if ((m_friendsTick % 15) == 0)
+    {
+        fetchFullRoster();
+        fetchLevels();
+    }
     ++m_friendsTick;
 }
 
@@ -3021,6 +3113,8 @@ void LauncherWindow::watchGameProcess()
                 reportPresence(); // dejo de estar "en partida"
                 reconnectToLobby();
                 offerRematch(finishedOpponent, m_lastMatchType);
+                // La partida recien terminada ya cuenta: se refresca el nivel.
+                QTimer::singleShot(6000, this, [this]() { fetchLevels(); fetchFullRoster(); });
             }
         });
     }

@@ -177,6 +177,12 @@ private:
     QString lobbyStateFor(const QString& nickname) const;
     void fetchFriends();
     void refreshFriendsDisplay();
+    // Nivel de experiencia (sin tope): 100 XP por partida + 50 por victoria.
+    // La misma cuenta esta en la web (config.js, levelInfo).
+    void fetchLevels();
+    void onLevelsReply(QNetworkReply* reply);
+    void refreshMyLevelLabel();
+    QString levelSuffix(const QString& nickname) const;
     // ---- Estado de presencia, matchmaking, revancha, diagnostico ----
     void setPresenceMode(const QString& mode);
     void setSearching(bool on);
@@ -288,6 +294,7 @@ private:
         bool iAmRequester = false;
     };
     QList<FriendEntry> m_friends;
+    QHash<QString, qint64> m_xp; // nickname -> XP total
     QString m_presenceMode = QStringLiteral("online"); // online | dnd | searching
     QString m_modeBeforeSearch = QStringLiteral("online");
     bool    m_searching = false;
