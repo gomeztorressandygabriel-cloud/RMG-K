@@ -1577,39 +1577,13 @@ std::array<std::string, 4> GetLiveKailleraPortLabelNames()
 #endif // NETPLAY
 } // namespace
 
-// Auto-launches live_reader.py hidden (no console window) alongside RMG-K, so
-// every player's match feeds the website's live stats/rank tracking without
-// them ever having to run it themselves. Best-effort: if Python isn't
-// installed on this machine, CreateProcess just fails silently and the rest
-// of the emulator is unaffected — this never blocks startup.
-static void LaunchLiveStatsReaderHidden()
-{
-    const wchar_t* scriptPath = L"C:\\SmashRemixLiveStats\\live_reader.py";
-    if (GetFileAttributesW(scriptPath) == INVALID_FILE_ATTRIBUTES)
-    {
-        return; // not installed on this machine
-    }
-
-    std::wstring cmdLine = L"pythonw \"";
-    cmdLine += scriptPath;
-    cmdLine += L"\"";
-
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi{};
-
-    // CREATE_NO_WINDOW: belt-and-suspenders alongside SW_HIDE — pythonw has no
-    // console anyway, but this also suppresses one if PATH resolves to the
-    // console python.exe instead on some installs.
-    if (CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, L"C:\\SmashRemixLiveStats", &si, &pi))
-    {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-    }
-}
+// El reporte de resultados a la pagina vive ahora en LiveStatsReporter, dentro
+// de este mismo proceso. Antes habia aca un lanzador oculto de live_reader.py,
+// pero distribuirlo exigia empaquetar Python y dejar corriendo un proceso
+// escondido en la PC de cada jugador -- justo lo que marcan los antivirus, y
+// el origen del cuadro de consola que aparecia solo durante la partida.
+// live_reader.py sigue sirviendo para ver las stats en vivo por consola
+// mientras se desarrolla; se abre a mano.
 
 MainWindow::MainWindow() : QMainWindow(nullptr)
 {
@@ -1649,6 +1623,10 @@ bool MainWindow::Init(QApplication* app, bool showUI, bool launchROM)
     this->configureUI(app, showUI);
 
     this->onlineBridge = new OnlineBridge(this);
+
+    // Despues de OnlineBridge a proposito: saca de ahi la identidad de la
+    // partida (quien soy, en que puerto juego y contra quien).
+    this->liveStatsReporter = new LiveStatsReporter(this->onlineBridge, this);
 
 #ifdef NETPLAY
     connect(this->onlineBridge, &OnlineBridge::challengeRoomReady,
@@ -1830,6 +1808,14 @@ bool MainWindow::applyExclusiveFullscreen(void)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // Ultima oportunidad de reportarle el resultado a la pagina: quien
+    // cierra el emulador en la pantalla de resultados nunca llegaba a
+    // hacerlo, y sin los DOS reportes el servidor no aplica la partida.
+    if (this->liveStatsReporter != nullptr)
+    {
+        this->liveStatsReporter->finalizePendingMatch();
+    }
+
     bool inEmulation = this->emulationThread->isRunning();
 
     if (this->ui_ShowUI &&
@@ -4276,6 +4262,34 @@ void MainWindow::on_Action_Settings_Input(void)
     }
 }
 
+bool MainWindow::RunStandaloneSettingsDialog(const QString& kind)
+{
+    // Misma logica que on_Action_Settings_Graphics/Audio/Input (el menu
+    // Settings de siempre), solo que sin ROM ni ventana principal detras:
+    // CoreApplyPluginSettings() ya se llamo en Init(), asi que los plugins
+    // estan cargados y listos para abrir su dialogo nativo de configuracion.
+    if (kind == QStringLiteral("video"))
+    {
+        return CorePluginsOpenConfig(CorePluginType::Gfx, this);
+    }
+    if (kind == QStringLiteral("audio"))
+    {
+        return CorePluginsOpenConfig(CorePluginType::Audio, this);
+    }
+    if (kind == QStringLiteral("input"))
+    {
+        if (isRaphnetRawPlugin())
+        {
+            UserInterface::RaphnetInputDialog dialog(this);
+            dialog.exec();
+            return true;
+        }
+        CoreSettingsSetValue(SettingsID::Internal_InputPluginSwitchRequested, false);
+        return CorePluginsOpenConfig(CorePluginType::Input, this);
+    }
+    return false;
+}
+
 #ifdef NETPLAY
 void MainWindow::ensureKailleraSessionManager()
 {
@@ -4333,6 +4347,12 @@ void MainWindow::on_Lobby_SpectateLaunch(quint64 matchId, QString gameName)
     }
     this->ensureKailleraSessionManager();
     this->ui_SpectateCleanupPending = true;
+    if (this->ui_LauncherSpectateMode && !this->isVisible())
+    {
+        this->show();
+        this->raise();
+        this->activateWindow();
+    }
 
     n02::activateMode(2);
     n02::playbackBeginStream();
@@ -4456,6 +4476,14 @@ void MainWindow::stopLobbySpectate()
     if (this->rollbackLobbyDialog != nullptr)
     {
         this->rollbackLobbyDialog->stopSpectating();
+    }
+    // Abierto desde la pagina: al terminar de ver, RMG-K se cierra solo.
+    if (this->ui_LauncherSpectateMode)
+    {
+        QTimer::singleShot(1500, this, [this]() {
+            this->ui_ForceClose = true;
+            this->close();
+        });
     }
 }
 
@@ -4894,6 +4922,32 @@ void MainWindow::ensureRollbackLobbyDialog()
     // foreground when running. Lifetime is managed in MainWindow::~.
     this->rollbackLobbyDialog = new Dialog::RollbackLobbyDialog(nullptr);
     this->rollbackLobbyDialog->setAttribute(Qt::WA_DeleteOnClose, false);
+    // Modo Launcher: la ventana principal viene oculta. Esta conexion va
+    // ANTES que la del arranque de la emulacion a proposito -- las slots
+    // corren en orden de conexion, asi que la ventana ya esta visible
+    // cuando el juego empieza a dibujar.
+    connect(this->rollbackLobbyDialog, &Dialog::RollbackLobbyDialog::matchReady,
+            this, [this]() {
+                if (this->ui_LauncherMatchMode && !this->isVisible())
+                {
+                    this->show();
+                    this->raise();
+                    this->activateWindow();
+                }
+            });
+    // Si la partida del Launcher no se puede armar, hay que mostrar la
+    // ventana igual: en ese modo esta oculta, asi que un fallo silencioso
+    // deja al jugador mirando la nada sin saber que paso.
+    connect(this->rollbackLobbyDialog, &Dialog::RollbackLobbyDialog::launcherMatchFailed,
+            this, [this](const QString& reason) {
+                if (!this->isVisible())
+                {
+                    this->show();
+                    this->raise();
+                    this->activateWindow();
+                }
+                this->showErrorMessage("No se pudo iniciar la partida", reason);
+            });
     // Route the lobby's match-ready signal to the lobby-specific slot.
     // That slot calls SetLobbyNetplay (LOBBY| address prefix) so
     // CoreStartEmulation uses GekkoNet's default UDP adapter instead
@@ -4952,15 +5006,48 @@ void MainWindow::on_OnlineBridge_ChallengeRoomReady(quint64 roomId, QString nick
     this->rollbackLobbyDialog->activateWindow();
 }
 
-void MainWindow::autoJoinChallengeRoom(quint64 roomId, const QString& nickname)
+void MainWindow::startLauncherMatch(const QString& nickname, const QString& roomName,
+                                     const QString& password, const QString& opponent,
+                                     const QString& romFile, const QString& romMd5, bool isHost,
+                                     const QString& matchType, const QString& teamMembers,
+                                     bool record, bool liveReplay)
 {
+    this->ui_LauncherMyNickname = nickname;
+    this->ui_LauncherOpponentNickname = opponent;
+    this->ui_LauncherTeamMembers = teamMembers;
+    // "team" tiene que pasar tal cual -- antes este ternario solo dejaba
+    // pasar "casual" y convertia cualquier otra cosa (incluido "team") en
+    // "ranked" sin avisar.
+    this->ui_LauncherMatchType =
+        (matchType == QStringLiteral("casual") || matchType == QStringLiteral("team"))
+        ? matchType : QStringLiteral("ranked");
+
+    // Se marca ANTES de crear el dialogo: ensureRollbackLobbyDialog engancha
+    // ahi el "mostrar la ventana" a matchReady, y tiene que quedar conectado
+    // antes que el arranque de la emulacion para que el juego no dibuje
+    // sobre una ventana todavia oculta.
+    this->ui_LauncherMatchMode = true;
+
     this->ensureRollbackLobbyDialog();
-    this->rollbackLobbyDialog->connectAutomatically(nickname);
-    this->rollbackLobbyDialog->autoJoinRoomOnConnect(roomId);
-    // Deliberately no show()/setRomLibrary() here -- this dialog must stay
-    // invisible for the Launcher-driven flow. Its own timers/signals still
-    // run regardless of visibility; only matchReady (which shows the actual
-    // game) should ever become visible to the player in this flow.
+    // Nada de show()/setRomLibrary(): el Lobby nunca se ve en este flujo, y
+    // la ROM no sale de la biblioteca sino del archivo exacto que manda el
+    // Launcher (la modificada, que suele no estar en la biblioteca).
+    const int maxPlayers = (this->ui_LauncherMatchType == QStringLiteral("team")) ? 4 : 2;
+    this->rollbackLobbyDialog->startLauncherMatch(nickname, roomName, password,
+                                                  romFile, romMd5, isHost, maxPlayers,
+                                                  record, liveReplay);
+}
+
+void MainWindow::startLauncherSpectate(const QString& nickname, const QString& targetNickname,
+                                        const QString& romFile)
+{
+    this->ui_LauncherMyNickname = nickname;
+    this->ui_LauncherSpectateMode = true;
+    this->ui_LauncherSpectateRom = romFile;
+    this->ui_LauncherMatchMode = true; // ventana oculta hasta que empiece la reproduccion
+
+    this->ensureRollbackLobbyDialog();
+    this->rollbackLobbyDialog->startLauncherSpectate(nickname, targetNickname);
 }
 
 void MainWindow::on_Action_Rollback_Lobby(void)
@@ -4985,8 +5072,11 @@ void MainWindow::on_Kaillera_GameStarted(QString gameName, int playerNum, int to
         return;
     }
 
-    // Find ROM file by game name
-    QString romFile = this->findRomByName(gameName);
+    // Find ROM file by game name (en modo "ver en vivo" del Launcher la ROM
+    // es la exacta que manda el Launcher, que no esta en la biblioteca).
+    QString romFile = (this->ui_LauncherSpectateMode && !this->ui_LauncherSpectateRom.isEmpty())
+        ? this->ui_LauncherSpectateRom
+        : this->findRomByName(gameName);
     if (romFile.isEmpty())
     {
         this->showErrorMessage("ROM Not Found",
@@ -5114,6 +5204,20 @@ void MainWindow::on_Lobby_SessionRequested(QString gameName, QString romFile, QS
     // finalizes the match identity live_reader.py reads to report wins/losses.
     if (this->onlineBridge != nullptr)
     {
+        // Partida del Launcher: el desafio se negocio fuera del juego, asi
+        // que OnlineBridge no tiene nada pendiente -- hay que darle la
+        // identidad aca o live_reader.py no reporta nada a la pagina.
+        if (this->ui_LauncherMatchMode && this->rollbackLobbyDialog != nullptr)
+        {
+            this->onlineBridge->setLauncherMatchIdentity(
+                this->rollbackLobbyDialog->currentRoomId(),
+                this->ui_LauncherMyNickname,
+                this->ui_LauncherOpponentNickname,
+                this->ui_LauncherMatchType,
+                this->ui_LauncherTeamMembers);
+            this->onlineBridge->setLiveReplayActive(
+                this->rollbackLobbyDialog->roomLiveReplayEnabled());
+        }
         this->onlineBridge->recordMatchStarted(localPlayer);
     }
 

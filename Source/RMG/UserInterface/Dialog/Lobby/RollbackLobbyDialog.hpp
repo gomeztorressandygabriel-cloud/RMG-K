@@ -87,6 +87,39 @@ public:
     // game once matchReady fires, not a Lobby window.
     void connectAutomatically(const QString& username);
 
+    // Partida orquestada por el Launcher, sin nada de interfaz. El Launcher
+    // ya emparejo a los dos jugadores y les dijo su rol; aca solo se rearma
+    // la sala del lado de RMG-K:
+    //   host  -> crea la sala `roomName` protegida con `password`
+    //   guest -> la busca por nombre en la lista y entra con esa password
+    // No se hereda la sala que tenia el Launcher: el servidor la borra en
+    // cuanto se le va el ultimo integrante, y los dos launchers se
+    // desconectan justo al hacer el traspaso.
+    //
+    // romFile es la ruta EXACTA de la ROM modificada que el Launcher
+    // distribuye. Va explicita porque la biblioteca de ROMs de RMG-K suele
+    // apuntar a otra carpeta donde solo esta la Smash Remix normal: sin
+    // esto, o no se encuentra ROM, o peor, arranca la equivocada.
+    // maxPlayers: 2 para un desafio 1v1 (ranked/casual), 4 para Team. Solo
+    // lo usa el HOST al crear la sala -- el invitado la busca por nombre y
+    // se une al tamaño que el host ya definio.
+    void startLauncherMatch(const QString& username, const QString& roomName,
+                            const QString& password, const QString& romFile,
+                            const QString& romMd5, bool isHost, int maxPlayers = 2,
+                            bool record = false, bool liveReplay = false);
+
+    // Modo "ver en vivo" del Launcher: conecta al Lobby y, en cuanto aparece
+    // una partida transmitiendo donde juega `targetNickname`, empieza a verla.
+    void startLauncherSpectate(const QString& username, const QString& targetNickname);
+
+    // Valor que el servidor publica para la sala actual (Live Replay activo).
+    bool roomLiveReplayEnabled() const { return m_roomLiveReplayEnabled; }
+
+    // Sala en la que estoy sentado ahora (0 si ninguna). Las dos PCs de una
+    // misma partida ven el mismo id, asi que sirve de clave para emparejar
+    // los dos reportes de resultado en el servidor.
+    quint64 currentRoomId() const { return m_currentRoomId; }
+
 signals:
     // Fired when the server has issued MATCH_BEGIN. Each entry in remotePeers
     // is pre-formatted as "<slot>,<ip>,<port>" — matches the LOBBY| address
@@ -99,6 +132,11 @@ signals:
 
     // Fired when the user clicks "Close Game" mid-match or when a peer drops.
     void closeMatchRequested();
+
+    // La partida lanzada por el Launcher no pudo armarse. En ese modo no hay
+    // ninguna ventana a la vista, asi que sin esto el jugador se queda
+    // mirando la nada sin saber que fallo.
+    void launcherMatchFailed(QString reason);
 
     // Non-modal in-game warning: lobby-backed services (including chat) are
     // offline, but the established peer-to-peer match transport is intact.
@@ -480,6 +518,32 @@ private:
     // Room id an in-game challenge asked us to join once connected; 0 when
     // nothing is queued. See autoJoinRoomOnConnect / tryAutoJoinPendingRoom.
     quint64  m_pendingAutoJoinRoomId = 0;
+
+    // Estado del modo "partida del Launcher" (ver startLauncherMatch).
+    bool     m_launcherMatchPending = false;
+    bool     m_launcherLiveReplay = false;
+    bool     m_roomLiveReplayEnabled = false;
+    bool     m_launcherSpectatePending = false;
+    QString  m_launcherSpectateTarget;
+    QTimer*  m_launcherSpectateTimeout = nullptr;
+    void     tryLauncherSpectateStep();
+    bool     m_launcherIsHost = false;
+    int      m_launcherMaxPlayers = 2;
+    QString  m_launcherRoomName;
+    QString  m_launcherRoomPassword;
+    QString  m_launcherRomFile;
+    QString  m_launcherRomMd5;
+    // Crear la sala una sola vez aunque el estado Connected se repita.
+    bool     m_launcherRoomCreated = false;
+    QString  m_launcherUsername;
+    // El servidor limita conexiones nuevas por IP en ventanas de segundos.
+    // Los dos RMG-K de una partida arrancan casi en el mismo instante, asi
+    // que chocar es lo normal, no la excepcion: sin reintento el que pierde
+    // se queda colgado y, como en este modo no hay ventana, el jugador no ve
+    // absolutamente nada.
+    int      m_launcherConnectAttempts = 0;
+    void     tryLauncherMatchStep();
+    void     retryLauncherConnect();
 
     // True for a room that came from an in-game challenge (OnlineBridge),
     // set by autoJoinRoomOnConnect. Once this room becomes startable (see

@@ -238,12 +238,51 @@ int main(int argc, char **argv)
     QCommandLineOption exportLabelPortsOption("export-label-ports", "Internal replay export mode: label controller ports");
     QCommandLineOption exportVerboseOption("export-verbose", "Internal replay export mode: verbose export logging");
 #ifdef NETPLAY
-    QCommandLineOption joinLobbyRoomOption("join-lobby-room",
-        "Internal: used by the standalone Launcher to join a matched lobby room automatically", "roomId");
+    // Modo "partida del Launcher": RMG-K arranca sin interfaz, crea o busca
+    // la sala acordada y solo se hace visible cuando la partida empieza.
     QCommandLineOption lobbyNicknameOption("lobby-nickname",
-        "Internal: nickname to use when auto-joining a lobby room", "nickname");
-    joinLobbyRoomOption.setFlags(QCommandLineOption::HiddenFromHelp);
+        "Internal: nickname to use for the launcher-driven match", "nickname");
+    QCommandLineOption lobbyMatchRoomOption("lobby-match-room",
+        "Internal: room to create (host) or find by name and join (guest)", "name");
+    QCommandLineOption lobbyMatchPasswordOption("lobby-match-password",
+        "Internal: password of the launcher-driven match room", "password");
+    QCommandLineOption lobbyMatchRomOption("lobby-match-rom",
+        "Internal: exact ROM file to run for the launcher-driven match", "path");
+    QCommandLineOption lobbyMatchRomMd5Option("lobby-match-rom-md5",
+        "Internal: MD5 of that ROM, advertised in the room", "md5");
+    QCommandLineOption lobbyMatchOpponentOption("lobby-match-opponent",
+        "Internal: opponent nickname, for the live stats reporter", "nickname");
+    QCommandLineOption lobbyMatchTypeOption("lobby-match-type",
+        "Internal: \"ranked\" or \"casual\" -- casual matches show in history but never touch points/wins/losses", "type");
+    QCommandLineOption lobbyMatchHostOption("lobby-match-host",
+        "Internal: this side creates the room; without it, this side joins it");
+    QCommandLineOption lobbyRecordOption("lobby-record",
+        "Internal: record this match to a .krec file on this PC");
+    QCommandLineOption lobbyLiveReplayOption("lobby-live-replay",
+        "Internal: (host only) stream this match as a Live Replay");
+    QCommandLineOption lobbySpectateOption("lobby-spectate",
+        "Internal: watch the live replay of the match this player is in", "nickname");
+    QCommandLineOption lobbyTeamMembersOption("lobby-team-members",
+        "Internal: the 4 team match nicknames in seat order (P1..P4), separated by '|'", "nicknames");
+    // Fuera del #ifdef NETPLAY a proposito: abrir la configuracion de un
+    // plugin no tiene nada que ver con el lobby, tiene que funcionar en
+    // cualquier build. Usado por el Launcher externo (Prince) para ofrecer
+    // "Configuracion grafica/sonido/controles" sin pasar por el emulador.
+    QCommandLineOption openSettingsOption("open-settings",
+        "Internal: open only the given plugin's config dialog (video/audio/input) and exit", "kind");
+    openSettingsOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchOpponentOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchTypeOption.setFlags(QCommandLineOption::HiddenFromHelp);
     lobbyNicknameOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchRoomOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchPasswordOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchRomOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchRomMd5Option.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyMatchHostOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyTeamMembersOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyRecordOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbyLiveReplayOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    lobbySpectateOption.setFlags(QCommandLineOption::HiddenFromHelp);
 #endif // NETPLAY
     exportKrecOption.setFlags(QCommandLineOption::HiddenFromHelp);
     exportRomOption.setFlags(QCommandLineOption::HiddenFromHelp);
@@ -277,9 +316,20 @@ int main(int argc, char **argv)
     parser.addOption(exportLabelPortsOption);
     parser.addOption(exportVerboseOption);
 #ifdef NETPLAY
-    parser.addOption(joinLobbyRoomOption);
     parser.addOption(lobbyNicknameOption);
+    parser.addOption(lobbyMatchRoomOption);
+    parser.addOption(lobbyMatchPasswordOption);
+    parser.addOption(lobbyMatchRomOption);
+    parser.addOption(lobbyMatchRomMd5Option);
+    parser.addOption(lobbyMatchOpponentOption);
+    parser.addOption(lobbyMatchTypeOption);
+    parser.addOption(lobbyMatchHostOption);
+    parser.addOption(lobbyTeamMembersOption);
+    parser.addOption(lobbyRecordOption);
+    parser.addOption(lobbyLiveReplayOption);
+    parser.addOption(lobbySpectateOption);
 #endif // NETPLAY
+    parser.addOption(openSettingsOption);
     parser.addPositionalArgument("ROM", "ROM to open");
 
     // parse arguments
@@ -361,21 +411,67 @@ int main(int argc, char **argv)
                 window.OpenROM(args.at(0), parser.value(diskOption), parser.isSet(fullscreenOption), parser.isSet(quitAfterEmulationOption), saveStateSlot);
             }
 
-#ifdef NETPLAY
-            if (parser.isSet(joinLobbyRoomOption) && parser.isSet(lobbyNicknameOption))
+            // Modo "solo configuracion": ni ventana principal ni ROM, se abre
+            // el dialogo nativo del plugin pedido y se cierra al confirmar/
+            // cancelar. No hace falta el loop de eventos de Qt (exec() de un
+            // QDialog ya corre su propio loop anidado), asi que corre y
+            // vuelve antes de decidir si mostrar algo.
+            if (parser.isSet(openSettingsOption))
             {
-                bool parsedRoomId = false;
-                const quint64 roomId = parser.value(joinLobbyRoomOption).toULongLong(&parsedRoomId);
-                const QString nickname = parser.value(lobbyNicknameOption);
-                if (parsedRoomId && roomId != 0 && !nickname.isEmpty())
+                const QString kind = parser.value(openSettingsOption);
+                if (!window.RunStandaloneSettingsDialog(kind))
                 {
-                    window.autoJoinChallengeRoom(roomId, nickname);
+                    CoreAddCallbackMessage(CoreDebugMessageType::Error,
+                        ("--open-settings: kind desconocido o sin dialogo de config: " + kind.toStdString()));
+                }
+                if (windowInitialized)
+                {
+                    CoreSettingsSave();
+                }
+                CoreShutdown();
+                return 0;
+            }
+
+            bool launcherMatchMode = false;
+#ifdef NETPLAY
+            if (parser.isSet(lobbySpectateOption) && parser.isSet(lobbyNicknameOption))
+            {
+                const QString nickname = parser.value(lobbyNicknameOption);
+                const QString target = parser.value(lobbySpectateOption);
+                if (!nickname.isEmpty() && !target.isEmpty())
+                {
+                    launcherMatchMode = true;
+                    window.startLauncherSpectate(nickname, target,
+                                                 parser.value(lobbyMatchRomOption));
+                }
+            }
+            else if (parser.isSet(lobbyMatchRoomOption) && parser.isSet(lobbyNicknameOption))
+            {
+                const QString nickname = parser.value(lobbyNicknameOption);
+                const QString roomName = parser.value(lobbyMatchRoomOption);
+                if (!nickname.isEmpty() && !roomName.isEmpty())
+                {
+                    launcherMatchMode = true;
+                    window.startLauncherMatch(nickname, roomName,
+                                              parser.value(lobbyMatchPasswordOption),
+                                              parser.value(lobbyMatchOpponentOption),
+                                              parser.value(lobbyMatchRomOption),
+                                              parser.value(lobbyMatchRomMd5Option),
+                                              parser.isSet(lobbyMatchHostOption),
+                                              parser.value(lobbyMatchTypeOption),
+                                              parser.value(lobbyTeamMembersOption),
+                                              parser.isSet(lobbyRecordOption),
+                                              parser.isSet(lobbyLiveReplayOption));
                 }
             }
 #endif // NETPLAY
 
-            // show window
-            window.show();
+            // show window -- salvo en el modo del Launcher, donde todo pasa
+            // por detras y la ventana recien aparece cuando arranca la partida.
+            if (!launcherMatchMode)
+            {
+                window.show();
+            }
 
             exitCode = app.exec();
         }

@@ -14,6 +14,7 @@
 #include "EventFilter.hpp"
 #include "Callbacks.hpp"
 #include "OnlineBridge.hpp"
+#include "LiveStatsReporter.hpp"
 
 #include <RMG-Core/RollbackNetcode.hpp>
 
@@ -58,14 +59,30 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
 
     bool Init(QApplication* app, bool showUI, bool launchROM);
     void OpenROM(QString file, QString disk, bool fullscreen, bool quitAfterEmulation, int stateSlot);
+    // Abre UNICAMENTE el dialogo nativo de config de un plugin (video/audio/
+    // input) y no muestra nada mas -- ni la ventana principal ni el
+    // navegador de ROMs. Pensado para que el Launcher externo (Prince) pueda
+    // ofrecer "Configuracion grafica/sonido/controles" sin que el jugador
+    // tenga que pasar por el emulador. kind es "video", "audio" o "input".
+    // Devuelve false si kind no es reconocido.
+    bool RunStandaloneSettingsDialog(const QString& kind);
 #ifdef NETPLAY
     QString ResolveKailleraRomByName(QString gameName);
-    // Called once at startup (see main.cpp's --join-lobby-room option) when
-    // RMG-K was launched by the standalone Launcher app rather than by the
-    // player. Connects straight to that lobby room under `nickname`, with
-    // the Lobby dialog never shown -- the player only sees the game once
-    // matchReady fires.
-    void autoJoinChallengeRoom(quint64 roomId, const QString& nickname);
+    // Llamado una vez al arrancar (ver --lobby-match-room en main.cpp)
+    // cuando a RMG-K lo abrio el Launcher y no el jugador. Todo corre por
+    // detras: ni ventana principal ni Lobby a la vista; el jugador recien ve
+    // algo cuando la partida arranca de verdad.
+    void startLauncherMatch(const QString& nickname, const QString& roomName,
+                            const QString& password, const QString& opponent,
+                            const QString& romFile, const QString& romMd5, bool isHost,
+                            const QString& matchType = QStringLiteral("ranked"),
+                            const QString& teamMembers = QString(),
+                            bool record = false, bool liveReplay = false);
+    // Modo "ver en vivo" abierto desde la pagina (prince://watch): entra al
+    // Lobby, busca la partida transmitiendo donde juega `targetNickname` y la
+    // reproduce con la ROM exacta que manda el Launcher.
+    void startLauncherSpectate(const QString& nickname, const QString& targetNickname,
+                               const QString& romFile);
 #endif
 
   private:
@@ -150,6 +167,10 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
 
     Dialog::LogDialog logDialog;
     OnlineBridge* onlineBridge = nullptr;
+    // Lee la memoria compartida del plugin de audio y le reporta el
+    // resultado de cada partida de desafio a la pagina. Reemplaza el
+    // live_reader.py que antes habia que correr a mano.
+    LiveStatsReporter* liveStatsReporter = nullptr;
 #ifdef NETPLAY
     Dialog::NetplaySessionDialog* netplaySessionDialog = nullptr;
     Dialog::RollbackLobbyDialog* rollbackLobbyDialog = nullptr;
@@ -164,6 +185,21 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     bool ui_RollbackLivePumpActive = false;
     bool ui_RollbackNetplayRoomActive = false;
     bool ui_RollbackNetplayLaunchActive = false;
+    // Abierto por el Launcher: la ventana principal arranca oculta y recien
+    // se muestra cuando la partida empieza (ver startLauncherMatch).
+    bool ui_LauncherMatchMode = false;
+    // Identidad que el Launcher ya resolvio, para pasarsela a OnlineBridge
+    // cuando arranque la partida (es lo que live_reader.py necesita para
+    // reportarle el resultado a la pagina).
+    QString ui_LauncherMyNickname;
+    QString ui_LauncherOpponentNickname;
+    // "ranked" o "casual" -- ver LiveStatsReporter::reportMatch.
+    QString ui_LauncherMatchType = QStringLiteral("ranked");
+    // Solo para matchType=="team": los 4 nicknames en orden de asiento
+    // (P1..P4), separados por '|' -- ver LiveStatsReporter::pushLiveState.
+    QString ui_LauncherTeamMembers;
+    bool ui_LauncherSpectateMode = false;
+    QString ui_LauncherSpectateRom;
     // Bounds the "stop the old game, retry in 50ms" relaunch loop so a previous
     // emulation that refuses to stop can't spin forever (hung background game).
     int  ui_RollbackRelaunchAttempts = 0;

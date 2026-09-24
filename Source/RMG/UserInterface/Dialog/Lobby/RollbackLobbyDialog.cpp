@@ -2304,6 +2304,16 @@ void RollbackLobbyDialog::clampTreeColumns(QTreeWidget* tree, int resizedIndex)
 
 QString RollbackLobbyDialog::localRomPathForMd5(const QString& md5) const
 {
+    // Partida del Launcher: la ROM viene dada explicita y es la unica valida
+    // (la biblioteca local suele tener solo la Smash Remix normal, que NO
+    // sirve para jugar contra alguien que corre la modificada).
+    if (!m_launcherRomFile.isEmpty() &&
+        (m_launcherRomMd5.isEmpty() || md5.isEmpty() ||
+         m_launcherRomMd5.compare(md5, Qt::CaseInsensitive) == 0))
+    {
+        return m_launcherRomFile;
+    }
+
     if (md5.isEmpty())
         return QString();
     for (auto it = m_roms.constBegin(); it != m_roms.constEnd(); ++it)
@@ -2416,6 +2426,15 @@ void RollbackLobbyDialog::onClientStateChanged(LobbyClient::ConnectionState s)
     updateStatusIndicator(s);
 
     const bool connected = (s == LobbyClient::ConnectionState::Connected);
+    if (connected)
+    {
+        m_launcherConnectAttempts = 0;
+        tryLauncherMatchStep();
+    }
+    else if (s == LobbyClient::ConnectionState::Failed && m_launcherMatchPending)
+    {
+        retryLauncherConnect();
+    }
     if (connected)
         m_matchConnectionLostNoticeShown = false;
     // Ping probing runs for the whole connection lifetime — it feeds the
@@ -2841,6 +2860,10 @@ public:
 
 void RollbackLobbyDialog::onRoomListChanged()
 {
+    // El invitado de una partida del Launcher espera a que la sala del rival
+    // aparezca en la lista; cada actualizacion es una oportunidad de entrar.
+    tryLauncherMatchStep();
+
     m_roomsTree->clear();
     m_matchesTree->clear();
     m_roomItems.clear();
@@ -2930,6 +2953,166 @@ void RollbackLobbyDialog::connectAutomatically(const QString& username)
     clearServerRoomSnapshot();
     updateServerMeta();
     m_client->connectToServer(m_serverUrl, m_username, {}, QString());
+}
+
+void RollbackLobbyDialog::startLauncherMatch(const QString& username, const QString& roomName,
+                                              const QString& password, const QString& romFile,
+                                              const QString& romMd5, bool isHost, int maxPlayers,
+                                              bool record, bool liveReplay)
+{
+    // "Grabar partida" es local de cada jugador; Live Replay solo lo puede
+    // activar el host (el servidor rechaza a cualquiera que no lo sea).
+    n02_kaillera_recording_enabled = record || (liveReplay && isHost);
+    if (m_recordCheck)
+        m_recordCheck->setChecked(n02_kaillera_recording_enabled);
+    m_launcherLiveReplay   = liveReplay && isHost;
+    m_launcherRoomName     = roomName;
+    m_launcherRoomPassword = password;
+    m_launcherRomFile      = romFile;
+    m_launcherRomMd5       = romMd5;
+    m_launcherIsHost       = isHost;
+    m_launcherMaxPlayers   = (maxPlayers == 4) ? 4 : 2;
+    m_launcherMatchPending = true;
+    m_launcherRoomCreated  = false;
+    m_launcherUsername     = username;
+    m_launcherConnectAttempts = 0;
+
+    if (isHost)
+    {
+        // connectAutomatically limpia el snapshot de sala, y eso apaga
+        // m_autoStartPending -- por eso se prende recien despues.
+        connectAutomatically(username);
+        m_autoStartPending = true;
+        tryLauncherMatchStep();
+        return;
+    }
+
+    // El invitado entra escalonado: los dos RMG-K arrancan en el mismo
+    // instante y el servidor limita conexiones nuevas por IP, asi que
+    // conectarse juntos hace que a uno lo rechacen. Ademas el invitado no
+    // tiene nada que hacer hasta que el anfitrion cree la sala.
+    QTimer::singleShot(3500, this, [this, username]() {
+        connectAutomatically(username);
+        m_autoStartPending = true;
+        tryLauncherMatchStep();
+    });
+}
+
+void RollbackLobbyDialog::startLauncherSpectate(const QString& username, const QString& targetNickname)
+{
+    m_launcherSpectatePending = true;
+    m_launcherSpectateTarget = targetNickname;
+    m_launcherUsername = username;
+    connectAutomatically(username);
+
+    // Si en 30 s no aparece una partida transmitiendo, avisar en vez de
+    // dejar al jugador esperando con la ventana oculta.
+    if (m_launcherSpectateTimeout == nullptr)
+    {
+        m_launcherSpectateTimeout = new QTimer(this);
+        m_launcherSpectateTimeout->setSingleShot(true);
+        connect(m_launcherSpectateTimeout, &QTimer::timeout, this, [this]() {
+            if (!m_launcherSpectatePending)
+                return;
+            m_launcherSpectatePending = false;
+            emit launcherMatchFailed(
+                tr("No se encontro una partida con Live Replay de ese jugador. "
+                   "Puede que ya haya terminado."));
+        });
+    }
+    m_launcherSpectateTimeout->start(30000);
+    tryLauncherSpectateStep();
+}
+
+void RollbackLobbyDialog::tryLauncherSpectateStep()
+{
+    if (!m_launcherSpectatePending || !m_client)
+        return;
+    if (m_client->state() != LobbyClient::ConnectionState::Connected)
+        return;   // se reintenta cuando conecte
+    for (auto it = m_client->rooms().constBegin(); it != m_client->rooms().constEnd(); ++it)
+    {
+        if (it->state != QStringLiteral("in_game") || !it->broadcasting || it->matchId == 0)
+            continue;
+        for (const QString& n : it->playerNames)
+        {
+            if (n.compare(m_launcherSpectateTarget, Qt::CaseInsensitive) == 0)
+            {
+                m_launcherSpectatePending = false;
+                if (m_launcherSpectateTimeout)
+                    m_launcherSpectateTimeout->stop();
+                beginSpectate(it->matchId, it->romName);
+                return;
+            }
+        }
+    }
+}
+
+void RollbackLobbyDialog::retryLauncherConnect()
+{
+    if (!m_launcherMatchPending || m_launcherUsername.isEmpty())
+        return;
+
+    if (m_launcherConnectAttempts >= 4)
+    {
+        m_launcherMatchPending = false;
+        emit launcherMatchFailed(
+            tr("No se pudo conectar al servidor del Lobby para armar la partida."));
+        return;
+    }
+
+    const int delayMs = 3000 * (m_launcherConnectAttempts + 1);
+    ++m_launcherConnectAttempts;
+    QTimer::singleShot(delayMs, this, [this]() {
+        if (!m_launcherMatchPending)
+            return;
+        connectAutomatically(m_launcherUsername);
+        m_autoStartPending = true;
+        tryLauncherMatchStep();
+    });
+}
+
+void RollbackLobbyDialog::tryLauncherMatchStep()
+{
+    tryLauncherSpectateStep();
+    if (!m_launcherMatchPending || !m_client)
+        return;
+    if (m_client->state() != LobbyClient::ConnectionState::Connected)
+        return;   // se reintenta cuando conecte
+    if (m_currentRoomId != 0)
+    {
+        m_launcherMatchPending = false;   // ya estoy sentado, no queda nada
+        return;
+    }
+
+    if (m_launcherIsHost)
+    {
+        if (m_launcherRoomCreated)
+            return;   // ya pedida, esperando ROOM_CREATED
+        m_launcherRoomCreated = true;
+        m_client->createRoom(m_launcherRoomName,
+                             QStringLiteral("SMASH REMIX"),
+                             m_launcherRomMd5,
+                             QString(),
+                             m_launcherMaxPlayers,   // 2 = 1v1, 4 = Team
+                             -1,  // delay Auto
+                             0,   // prediction Default
+                             1,   // pacing Smooth
+                             m_launcherRoomPassword);
+        return;
+    }
+
+    // Invitado: la sala la crea el RMG-K del rival, asi que puede tardar unos
+    // segundos en aparecer. Cada ROOM_LIST vuelve a intentar.
+    for (auto it = m_client->rooms().constBegin(); it != m_client->rooms().constEnd(); ++it)
+    {
+        if (it->name == m_launcherRoomName && it->state == QStringLiteral("waiting"))
+        {
+            m_launcherMatchPending = false;
+            m_client->joinRoom(it->id, m_launcherRoomPassword);
+            return;
+        }
+    }
 }
 
 void RollbackLobbyDialog::tryAutoJoinPendingRoom()
@@ -3174,6 +3357,10 @@ void RollbackLobbyDialog::onRoomCreated(quint64 roomId)
     }
     enterRoom(roomId,
         QStringLiteral("<i>Room created — waiting for players</i>"));
+    // Partida del Launcher con Live Replay: la sala se crea sin el flag, asi
+    // que se publica ahora que ya existe.
+    if (m_launcherLiveReplay && m_client)
+        m_client->updateRoomLiveReplay(true);
 }
 
 void RollbackLobbyDialog::onRoomJoinOk(quint64 roomId)
@@ -3368,6 +3555,7 @@ void RollbackLobbyDialog::onRoomStateChanged(const QJsonObject& roomState)
         ? roomState.value("liveReplayEnabled").toBool()
         : (iAmHost && m_broadcastCheck && m_broadcastCheck->isChecked());
 
+    m_roomLiveReplayEnabled = liveReplayEnabled;
     m_currentRoomGame       = romName;
     m_currentRoomMd5        = romMd5;
     m_currentRoomRegion     = romRegion;

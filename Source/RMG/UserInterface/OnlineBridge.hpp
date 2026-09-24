@@ -100,10 +100,47 @@ class OnlineBridge : public QObject
     // Lobby match started instead).
     void recordMatchStarted(int localPort);
 
+    // Equivalente a handOffRoomToLobbyDialog pero para las partidas que
+    // orquesta el Launcher externo: ahi el desafio se negocia fuera del
+    // juego, asi que este puente nunca se entera de quien juega contra
+    // quien. Sin esto live_reader.py no encuentra identidad de partida y no
+    // le reporta nada a la pagina.
+    //
+    // matchKey tiene que ser el MISMO en las dos PCs (se usa el id de la
+    // sala del Lobby) porque el servidor empareja con el los dos reportes
+    // independientes, uno por jugador.
+    void setLauncherMatchIdentity(quint64 matchKey, const QString& myNickname,
+                                  const QString& opponentNickname,
+                                  const QString& matchType = QStringLiteral("ranked"),
+                                  const QString& teamMembers = QString());
+
     // MainWindow calls this once emulation for a challenge-originated match
     // actually stops, so a later local/practice session isn't mistakenly
     // attributed to a stale challenge. No-op if nothing is active.
     void clearActiveChallengeMatch();
+
+    // True si esta partida se esta transmitiendo por Live Replay; la pagina
+    // usa este dato para mostrar el boton "Ver en vivo".
+    void setLiveReplayActive(bool active) { m_liveReplayActive = active; }
+    bool liveReplayActive() const { return m_liveReplayActive; }
+
+    // Identidad de la partida de desafio en curso, para LiveStatsReporter.
+    // Devuelve false cuando no hay ninguna (partida local/practica: no se
+    // reporta nada a la pagina).
+    struct ActiveMatchIdentity
+    {
+        quint32 matchKey = 0;
+        quint32 myPort = 0;
+        QString myNickname;
+        QString opponentNickname;
+        // "ranked" o "casual" -- las amistosas se guardan en el historial
+        // pero nunca tocan wins/losses/rank_points (ver report_match_result).
+        QString matchType = QStringLiteral("ranked");
+        // Solo para matchType=="team": los 4 nicknames en orden de asiento
+        // (indice 0 = puerto 1, ..., indice 3 = puerto 4).
+        QStringList teamNicknames;
+    };
+    bool activeMatchIdentity(ActiveMatchIdentity& out) const;
 
   signals:
     // A challenge room is ready to actually play: MainWindow should open the
@@ -175,6 +212,24 @@ class OnlineBridge : public QObject
     // pending.
     quint64 m_pendingMatchKey = 0;
     QString m_pendingMatchOpponent;
+    QString m_pendingMatchType = QStringLiteral("ranked");
+    QStringList m_pendingTeamMembers;
+
+    // Copia EN PROCESO de la identidad de la partida. La memoria compartida
+    // tiene un nombre fijo por PC ("Local\SmashRemixOnlineBridge"), asi que
+    // dos RMG-K abiertos en la misma maquina escriben en el MISMO bloque y
+    // el segundo pisa la identidad del primero: los dos terminan creyendo
+    // que son el mismo jugador y el resultado nunca se puede emparejar.
+    // Estos campos son de cada proceso, asi que probar dos clientes en una
+    // sola PC funciona igual que en dos PCs distintas. El bloque compartido
+    // se sigue escribiendo para live_reader.py.
+    quint32 m_activeMatchKey = 0;
+    quint32 m_activeMyPort = 0;
+    QString m_activeMyNickname;
+    QString m_activeOpponentNickname;
+    QString m_activeMatchType = QStringLiteral("ranked");
+    QStringList m_activeTeamMembers;
+    bool m_liveReplayActive = false;
 
     // Room I just created for a challenge I sent, still waiting for the
     // target to actually join. Kept connected (NOT handed off yet) so the

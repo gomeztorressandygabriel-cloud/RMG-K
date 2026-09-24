@@ -409,6 +409,40 @@ void OnlineBridge::handOffRoomToLobbyDialog(quint64 roomId, bool isHost, const Q
     emit challengeRoomReady(roomId, nickname, isHost);
 }
 
+void OnlineBridge::setLauncherMatchIdentity(quint64 matchKey, const QString& myNickname,
+                                             const QString& opponentNickname,
+                                             const QString& matchType,
+                                             const QString& teamMembers)
+{
+    const bool isTeam = (matchType == QStringLiteral("team"));
+    // En Team no hay UN rival (hay dos, mas un companero), asi que el
+    // launcher no manda opponentNickname para ese modo -- exigirlo bloquearia
+    // el reporte entero. Para ranked/casual (1v1) sigue siendo obligatorio.
+    if (matchKey == 0 || myNickname.isEmpty() || (!isTeam && opponentNickname.isEmpty()))
+    {
+        return;
+    }
+
+    m_myNickname = myNickname;
+    m_pendingMatchKey = matchKey;
+    m_pendingMatchOpponent = opponentNickname;
+    m_pendingMatchType =
+        (matchType == QStringLiteral("casual") || isTeam) ? matchType : QStringLiteral("ranked");
+    m_pendingTeamMembers =
+        isTeam ? teamMembers.split(QLatin1Char('|'), Qt::SkipEmptyParts) : QStringList();
+    m_activeMyNickname = myNickname;
+
+    // resultNickname es de donde live_reader.py saca MI nombre. En el flujo
+    // de dentro del juego lo llenaba resolve_code; aca nadie lo hizo, porque
+    // la identidad ya la resolvio el Launcher antes de abrir RMG-K.
+    if (m_shared != nullptr)
+    {
+        const QByteArray utf8 = myNickname.toUtf8().left(23);
+        memset(m_shared->resultNickname, 0, sizeof(m_shared->resultNickname));
+        memcpy(m_shared->resultNickname, utf8.constData(), utf8.size());
+    }
+}
+
 void OnlineBridge::recordMatchStarted(int localPort)
 {
     if (m_pendingMatchKey == 0 || m_shared == nullptr)
@@ -422,12 +456,47 @@ void OnlineBridge::recordMatchStarted(int localPort)
     const QByteArray utf8 = m_pendingMatchOpponent.toUtf8().left(23);
     memcpy(m_shared->matchOpponentNickname, utf8.constData(), utf8.size());
 
+    // Copia propia de este proceso: es la que usa LiveStatsReporter, para no
+    // depender del bloque compartido (que otro RMG-K de la misma PC pisa).
+    m_activeMatchKey = static_cast<quint32>(m_pendingMatchKey);
+    m_activeMyPort = static_cast<quint32>(localPort);
+    m_activeOpponentNickname = m_pendingMatchOpponent;
+    m_activeMatchType = m_pendingMatchType;
+    m_activeTeamMembers = m_pendingTeamMembers;
+
     m_pendingMatchKey = 0;
     m_pendingMatchOpponent.clear();
+    m_pendingMatchType = QStringLiteral("ranked");
+    m_pendingTeamMembers.clear();
+}
+
+bool OnlineBridge::activeMatchIdentity(ActiveMatchIdentity& out) const
+{
+    // A proposito NO se lee del bloque compartido: su nombre es fijo por PC,
+    // asi que con dos RMG-K abiertos en la misma maquina el segundo pisa la
+    // identidad del primero y los dos reportarian como el mismo jugador.
+    if (m_activeMatchKey == 0 || m_activeMyPort == 0)
+    {
+        return false;
+    }
+
+    out.matchKey = m_activeMatchKey;
+    out.myPort = m_activeMyPort;
+    out.myNickname = m_activeMyNickname;
+    out.opponentNickname = m_activeOpponentNickname;
+    out.matchType = m_activeMatchType;
+    out.teamNicknames = m_activeTeamMembers;
+
+    // Team no tiene un unico rival (hay dos, mas un companero), asi que no
+    // exige opponentNickname -- solo mi propio nombre.
+    if (out.matchType == QStringLiteral("team"))
+        return !out.myNickname.isEmpty();
+    return !out.myNickname.isEmpty() && !out.opponentNickname.isEmpty();
 }
 
 void OnlineBridge::clearActiveChallengeMatch()
 {
+    m_liveReplayActive = false;
     if (m_shared == nullptr)
     {
         return;
@@ -435,6 +504,11 @@ void OnlineBridge::clearActiveChallengeMatch()
     m_shared->matchKey = 0;
     m_shared->myPort = 0;
     memset(m_shared->matchOpponentNickname, 0, sizeof(m_shared->matchOpponentNickname));
+
+    m_activeMatchKey = 0;
+    m_activeMyPort = 0;
+    m_activeOpponentNickname.clear();
+    m_activeMatchType = QStringLiteral("ranked");
 }
 
 void OnlineBridge::onLobbyRoomJoinFailed(const QString& reason)

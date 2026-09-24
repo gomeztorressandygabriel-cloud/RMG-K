@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>prince.ico</file>
+    </qresource>
+</RCC>

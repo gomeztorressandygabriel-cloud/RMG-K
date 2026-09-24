@@ -16,6 +16,8 @@ find_package(Qt6 6.2 COMPONENTS Gui Widgets Core Network WebSockets Concurrent R
 set(RMG_LAUNCHER_SOURCES
     main.cpp
     LauncherWindow.cpp
+    resource/launcher.qrc   # icono de la ventana (via QIcon ":/prince.ico")
+    resource/launcher.rc    # icono del .exe en el Explorador y la barra de tareas
     # Reused as-is from RMG's own Rollback Lobby -- same server, same
     # protocol, already tested. Compiled a second time into this separate
     # executable rather than split into a shared library, to keep this a
@@ -29,7 +31,7 @@ else()
     add_executable(RMG-Launcher ${RMG_LAUNCHER_SOURCES})
 endif()
 
-set_target_properties(RMG-Launcher PROPERTIES OUTPUT_NAME "Smash Remix Launcher")
+set_target_properties(RMG-Launcher PROPERTIES OUTPUT_NAME "Prince")
 
 target_include_directories(RMG-Launcher PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
@@ -57,5 +59,6 @@ endif(PORTABLE_INSTALL)
 
 if (WIN32)
     # ws2_32: LobbyClient calls WSAIoctl directly on the anchor socket.
-    target_link_libraries(RMG-Launcher ws2_32)
+    # winmm: PlaySound() for the incoming-challenge notification sound.
+    target_link_libraries(RMG-Launcher ws2_32 winmm)
 endif()
